@@ -1,0 +1,96 @@
+= Fast Rust Builds
+
+It's a common knowledge that Rust code is slow to compile.
+But I have a strong gut feeling that most Rust code out there compiles much slower than it could.
+
+As an example, one fairly recent https://kerkour.com/blog/rust-development-workflow/[post] says:
+
+> With Rust, on the other hand, it takes between **15 and 45 minutes** to run a CI pipeline, depending on your project and the power of your CI servers.
+
+This doesn't make sense to me.
+rust-analyzer CI takes **8** minutes on GitHub actions.
+It is a fairly large and complex project with 200k lines of own code and 1 million lines in dependencies on top.
+
+So let's look how to make builds fast!
+But first,
+
+== It's All About Culture
+
+I lied when I said that the above quote doesn't make sense to me.
+Seeing how an average Rust project is build, it very much does make sense.
+
+Compile times depend a lot on how a project is engineered.
+And that generally depends on how people build their projects in a specific language.
+
+If we are talking about build times and {cpp}, then a bunch of keywords immediately springs to mind: pimpl, physical architercture of software applications, non-template base, templates and header files.
+Rust carried over from {cpp} its monomporhization-based compilation model.
+It didn't seem to carry over a culture of optimizing for compilation time.
+
+One reason for that is that Rust doesn't have header files.
+For all their drawbacks, header files have one great advantage -- they give a physical manifistation of "will this be slow to compile" property.
+
+== Why Care About Build Times
+
+One thing I want to make clear is that optimizing project's build time is in some sense a busy-work.
+Build times provide very small _direct_ benefits to the users.
+
+* you could chose another language
+* choice of the language only defines the scale at which you hit the problems
+* build times are multiplicative
+* build times are a boiling frog kind of situation
+  * costly to fix later
+  * costly to notice regressions
+  * harder to appreciate wins
+* defy pareto principle
+* build time are everything is normal kind of situation:
+  * you junior developers will learn that that's OK
+
+== one magic trick just caring about build times
+  * do you know the time for CI?
+  * do you know which proportion of that is compiling, and which is testing?
+  * how long does it take to build a release on a laptop?
+
+== Tricks
+
+* use bors
+ * r+ merge time gap
+ * no way to cheese out of waiting for CI
+ * CI is a useful metrinc
+
+* CI caching
+  * all default configs are wrong
+  * cache stuff which is the same
+  * don't cache stuff which changes
+  * disable incremental
+
+* read the lockfile
+  * does this dependency make sense for the end application (regex, termcolor, paste lol)
+
+* cargo -Ztimings
+  * critical path
+  * splitting into crates might create critical path
+  * lateral split
+
+* proc macros, derive
+
+
+
+
+
+
+
+
+
+
+In this post, I will share my experience with making build process for large Rust projects reasonable.
+The post will go a bit beyond _just_ compilation performance.
+These two posts form the overall context of what I think is a good way to organize a large Rust project:
+
+* https://matklad.github.io/2021/08/22/large-rust-workspaces.html
+* https://matklad.github.io/2021/05/31/how-to-test.html
+
+== It's All About Culture
+
+Before I go into the mean of the post, let me spend some words philosophising.
+
+> With Rust, on the other hand, it takes between 15 and 45 minutes to run a CI pipeline, depending on your project and the power of your CI servers.
