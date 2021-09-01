@@ -9,62 +9,165 @@ As an example, one fairly recent https://kerkour.com/blog/rust-development-workf
 
 This doesn't make sense to me.
 rust-analyzer CI takes **8** minutes on GitHub actions.
-It is a fairly large and complex project with 200k lines of own code and 1 million lines in dependencies on top.
+It is a fairly large and complex project with 200k lines of own code and 1 million lines of dependencies on top.
 
 So let's look how to make builds fast!
-But first,
-
-== It's All About Culture
-
-I lied when I said that the above quote doesn't make sense to me.
-Seeing how an average Rust project is build, it very much does make sense.
-
-Compile times depend a lot on how a project is engineered.
-And that generally depends on how people build their projects in a specific language.
-
-If we are talking about build times and {cpp}, then a bunch of keywords immediately springs to mind: pimpl, physical architercture of software applications, non-template base, templates and header files.
-Rust carried over from {cpp} its monomporhization-based compilation model.
-It didn't seem to carry over a culture of optimizing for compilation time.
-
-One reason for that is that Rust doesn't have header files.
-For all their drawbacks, header files have one great advantage -- they give a physical manifistation of "will this be slow to compile" property.
 
 == Why Care About Build Times
 
-One thing I want to make clear is that optimizing project's build time is in some sense a busy-work.
-Build times provide very small _direct_ benefits to the users.
+One thing I want to make clear is that optimizing project's build time is in some sense busy-work.
+Reducing compilation time provides very small _direct_ benefits to the users, and is pure accidental complexity.
 
-* you could chose another language
-* choice of the language only defines the scale at which you hit the problems
-* build times are multiplicative
-* build times are a boiling frog kind of situation
-  * costly to fix later
-  * costly to notice regressions
-  * harder to appreciate wins
-* defy pareto principle
-* build time are everything is normal kind of situation:
-  * you junior developers will learn that that's OK
+That being said, compilation time is a __multiplier__ for basically everything.
+Whether you want to ship more features, to make code faster, to adapt to a change of requirements, or to attract new contributors, build time is a factor in that.
 
-== one magic trick just caring about build times
-  * do you know the time for CI?
-  * do you know which proportion of that is compiling, and which is testing?
-  * how long does it take to build a release on a laptop?
+It also is a non-linear factor.
+Just waiting for the compiler is a smaller problem.
+The big one is losing the state of the flow in the process or (worse) mental context switch to do something else while the code is compiling.
 
-== Tricks
+It's hard for me to quantify the impact, but my intuitive understanding is that, as soon as the project grows beyond several thousands lines written by one person, build times become pretty darn important!
 
-* use bors
- * r+ merge time gap
- * no way to cheese out of waiting for CI
- * CI is a useful metrinc
+The most devilish property of build times is that they creep up on you.
+While the project is small, build times are going to be acceptable.
+As projects grow incrementally, build times start to slowly increase as well.
+And if you let them grow, it might be rather hard to get them back in check later!
 
-* CI caching
-  * all default configs are wrong
-  * cache stuff which is the same
-  * don't cache stuff which changes
-  * disable incremental
+If project is already too slow to compile, then:
 
-* read the lockfile
-  * does this dependency make sense for the end application (regex, termcolor, paste lol)
+* Improving build times will be time consuming, because each iteration of "try a change, trigger the build, measure improvement" will take long time (yes, build times are a multiplier for everything, *including* build times!)
+* There won't be easy wins: in contrast to runtime performance, pareto principle doesn't work!
+  If you write a thousand lines of code, maybe one hundred of them will be performance-sensitive, but each line will add to compile times!
+* Small wins will seem too small until they add up: shaving five seconds off is a much bigger deal for a five minute build then for an hour-long build.
+* Dually, small regressions will go unnoticed.
+
+There's also a culture aspect to it: if you join a project and its CI takes one hour, then an hour-long CI is normal, right?
+
+Luckily, there's one simple trick to solve the problem of build times ...
+
+== The Silver Bullet
+
+You need to care about build times, keep an eye on them, and fix them _before_ they become a problem.
+Build times are a fairly easy optimization problem: it's trivial to get direct feedback (just time the build), there are a bunch of tools for profiling, and you don't even need to come up with a representative benchmark.
+The task is to optimize a particular project's build time, not performance of the compiler in general.
+That's a nice property of most instances of accidental complexity -- they tend to be well defined engineering problems with well understood solution.
+
+The only hard bit about compilation time problem is that you don't know that it's a problem until it is!
+So, the most valuable thing you can get from this post is this:
+if you are working on a Rust project, take some time to optimize its build time today, and try to repeat the exercise once in a while.
+
+Now, with the software engineering bits cleared, let's finally get to some actionable programming advice!
+
+== bors
+
+I like to use CI time as one of the main metrics to keep an eye on.
+
+Part of that is that CI time is important in itself.
+While you are not bound by CI when developing features, CI time directly affects how annoying it is to context switch between finishing one piece of work and starting to work on the next one.
+Worst case, you can have like five outstanding PRs waiting for CI to complete.
+Longer CI also creates a pressure to _not_ split the work into independent chunks.
+If correcting a typo requires keeping a PR tab open for half a hour, it's better to just make a drive by fix in the next feature branch, right?
+
+But a bigger part is that CI gives you a standardized benchmark.
+Locally, you compile incrementally, and the time of build varies greatly with the kinds of changes you are doing.
+Often, you compile just a subset of the project.
+Due to this inherent variability, local builds give poor continuous feedback about build times.
+Standardized CI though runs for every change and gives you a time series where numbers are directly comparable.
+
+To increase this standardization pressure of CI, I recommend following https://graydon2.dreamwidth.org/1597.html[not rocket science] rule and setting up a merge robot, which guarantees that every state of the main branch passes the CI.
+https://bors.tech[bors] is a particular implementation I use, but there are others.
+
+While it's by far not the biggest reason to use something like bors, it gives two benefits for healthy compile times:
+
+* It ensures that every change goes via CI, and creates pressure to keep CI healthy overall
+* The time between leaving ``r+`` comment on the PR and receiving the "`PR merged`" notification gives you an always on feedback loop.
+  You don't need to specifically time the build, every PR is a build benchmark.
+
+== CI Caching
+
+If you think about it, its pretty obvious how a good compilation strategy for CI should work.
+It makes sense to cache stuff that changes rarely, but it's useless to cache frequently changing things.
+That is, cache all the dependencies, but don't cache project's own crates.
+
+Unfortunately, almost nobody does this.
+A https://github.com/actions/cache/blob/main/examples.md#rust---cargo[typical example] would just cache the whole of `./target` directory.
+That's wrong -- the `./target` is huge, and most of it is useless on CI.
+
+It's not super trivial to fix though -- sadly, Cargo doesn't make it too easy to figure out which part of `./target` are durable dependencies, and which parts are volatile local crates.
+So, you'll need to write https://github.com/rust-analyzer/rust-analyzer/blob/94d9fc2a28ea5d97e3a9293b9dac05bdb00304cc/xtask/src/pre_cache.rs#L30-L53[some code] to clean the `./target` before storing the cache.
+For GitHub actions in particular, you can also use https://github.com/Swatinem/rust-cache[Swatinem/rust-cache].
+
+== CI Workflow
+
+Caching is usually the low-hanging watermelon, but there are several more things to tweak.
+
+https://github.com/rust-analyzer/rust-analyzer/blob/25368d24308d6a94ffe8b99f0122bcf5a2175322/.github/workflows/ci.yaml#L11[Disable] incremental compilation.
+CI builds often are closer to from-scratch builds, as changes are typically much bigger than from local edit compile cycle.
+For from-scratch builds, incremental adds an extra dependency-tracking overhead.
+It also significantly increases the amount of IO and the size of `./target`, which make caching less effective.
+
+While we are at it, set `-D warning` environmental variable to deny warning for all crates at the same time.
+It's a bad idea to `#![deny(warnings)]` in code: you need to repeat it for every crate, it needlessly makes local development harder, and it might break your users when they upgrade compiler.
+It might also makes sense to bump cargo network retry limits.
+If the project is pure Rust, consider https://github.com/rust-analyzer/rust-analyzer/blob/48f84a7b60bcbd7ec5fa6434d92d9e7a8eb9731b/.github/workflows/ci.yaml#L23[setting CC] to some nonsense.
+
+https://github.com/rust-analyzer/rust-analyzer/blob/48f84a7b60bcbd7ec5fa6434d92d9e7a8eb9731b/.github/workflows/ci.yaml#L56-L61[Split] CI into separate `cargo test --no-run` and `cargo test`.
+It is vital to know which part of your CI is the build, and which are the tests.
+
+https://github.com/rust-analyzer/rust-analyzer/blob/48f84a7b60bcbd7ec5fa6434d92d9e7a8eb9731b/Cargo.toml#L6-L10[Disable] debuginfo -- it makes `./target` much bigger, which again harms caching.
+Depending on your preferred workflow, you might consider disabling debug info altogether, this brings some benefits for local builds as well.
+
+== Read The Lockfile
+
+Another obvious advise is use fewer, smaller dependencies.
+
+This is nuanced: libraries do solve actual problems, and it would be stupid to roll your own solution to something already solved by crates.io.
+And it's not like it's guaranteed that your solution will be smaller.
+
+But it's important to realise what problems your application is and is not solving.
+If you are building a CLI utility for thousands people of to use, you absolutely need http://clap.rs[clap] with all of its features.
+If you are writing a quick script to run during CI, which only the team will be using, its probably fine to start with a restricted feature set, but faster builds.
+
+One _tremendously_ useful exercise here is to read `Cargo.lock` (not `Cargo.toml`) and for each dependency think about the actual problem this dependency solves for the user of the application.
+It's very frequent that you'll find dependencies that just don't make sense at all, _for your application_.
+
+As an illustrative example, rust-analyzer depends on `regex`.
+This doesn't make sense -- we have exact parsers and lexers for Rust and Markdown, we don't need to interpret regular expressions at runtime.
+`regex` is also one of the heavier dependencies -- it's a full implementation of a small language!
+The reason why the dependency is there is because the logging library we use allows to say something like:
+
+```
+RUST_LOG=rust-analyzer=very complex filtering expression
+```
+
+where parsing of the filtering expression is done via regexes.
+
+This is undoubtedly a very useful feature for some applications, but in the context of rust-analyzer we don't need it.
+Simple `env_logger`-style filtering would be enough.
+
+Once you identify a dependency like this, it's usually enough to tweak `features` field of dependency specification, or to send a PR upstream to make non-essential bits configurable.
+
+Sometimes it is a bigger yak to shave which gets postponed :)
+For example, rust-analyzer optionally use `jemalloc` crate, and its build script pulls in https://docs.rs/fs_extra[`fs_extra`] and (of all the things!) https://docs.rs/paste[`paste`].
+The ideal solution here would be of course to have production grade, stable, pure rust memory allocator.
+
+== Profile Before Optimize
+
+Now that we've dealt with things which are just sensible to do, it's time to start measuring before cutting.
+A tool to use here is `timings` flag for Cargo (https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#timings[documentation]).
+Sadly, I lack the eloquence to adequately express the level of quality and polish of this feature, so let me just say ❤️ and continue with my dry prose.
+
+What this flag does is that records profiling data during the build, and then renders it as a very legible and information-dense HTML file.
+This is a nightly feature, so you'll need the ``+nightly`` flag, but this isn't a problem in practice, as you only need this once in a while.a
+
+Here's an example from rust-analyzer:
+
+[source]
+----
+$ cargo +nightly -Z timings build --release -p rust-analyzer --bin rust-analyzer
+----
+
+image::/assets/cargo-timings.png[]
+
 
 * cargo -Ztimings
   * critical path
