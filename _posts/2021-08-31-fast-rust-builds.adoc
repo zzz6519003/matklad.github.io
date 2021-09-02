@@ -163,10 +163,17 @@ Here's an example from rust-analyzer:
 
 [source]
 ----
-$ cargo +nightly -Z timings build --release -p rust-analyzer --bin rust-analyzer
+cargo +nightly build -p rust-analyzer --bin rust-analyzer \
+  -Z timings --release
 ----
 
 image::/assets/cargo-timings.png[]
+
+== Compilation Model: Crates
+
+== Compilation Model: Macros
+
+== Compilation Model: Monomorphisation
 
 
 * cargo -Ztimings
