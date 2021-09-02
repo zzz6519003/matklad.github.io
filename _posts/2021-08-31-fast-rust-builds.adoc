@@ -23,7 +23,7 @@ Whether you want to ship more features, to make code faster, to adapt to a chang
 
 It also is a non-linear factor.
 Just waiting for the compiler is a smaller problem.
-The big one is losing the state of the flow in the process or (worse) mental context switch to do something else while the code is compiling.
+The big one is losing the state of the flow or (worse) mental context switch to do something else while the code is compiling.
 
 It's hard for me to quantify the impact, but my intuitive understanding is that, as soon as the project grows beyond several thousands lines written by one person, build times become pretty darn important!
 
@@ -34,7 +34,7 @@ And if you let them grow, it might be rather hard to get them back in check late
 
 If project is already too slow to compile, then:
 
-* Improving build times will be time consuming, because each iteration of "try a change, trigger the build, measure improvement" will take long time (yes, build times are a multiplier for everything, *including* build times!)
+* Improving build times will be time consuming, because each iteration of "`try a change, trigger the build, measure improvement`" will take long time (yes, build times are a multiplier for everything, _including_ build times!)
 * There won't be easy wins: in contrast to runtime performance, pareto principle doesn't work!
   If you write a thousand lines of code, maybe one hundred of them will be performance-sensitive, but each line will add to compile times!
 * Small wins will seem too small until they add up: shaving five seconds off is a much bigger deal for a five minute build then for an hour-long build.
@@ -49,7 +49,7 @@ Luckily, there's one simple trick to solve the problem of build times ...
 You need to care about build times, keep an eye on them, and fix them _before_ they become a problem.
 Build times are a fairly easy optimization problem: it's trivial to get direct feedback (just time the build), there are a bunch of tools for profiling, and you don't even need to come up with a representative benchmark.
 The task is to optimize a particular project's build time, not performance of the compiler in general.
-That's a nice property of most instances of accidental complexity -- they tend to be well defined engineering problems with well understood solution.
+That's a nice property of most instances of accidental complexity -- they tend to be well defined engineering problems with well understood solutions.
 
 The only hard bit about compilation time problem is that you don't know that it's a problem until it is!
 So, the most valuable thing you can get from this post is this:
@@ -63,7 +63,7 @@ I like to use CI time as one of the main metrics to keep an eye on.
 
 Part of that is that CI time is important in itself.
 While you are not bound by CI when developing features, CI time directly affects how annoying it is to context switch between finishing one piece of work and starting to work on the next one.
-Worst case, you can have like five outstanding PRs waiting for CI to complete.
+Juggling five outstanding PRs waiting for CI to complete is not productive.
 Longer CI also creates a pressure to _not_ split the work into independent chunks.
 If correcting a typo requires keeping a PR tab open for half a hour, it's better to just make a drive by fix in the next feature branch, right?
 
@@ -73,7 +73,7 @@ Often, you compile just a subset of the project.
 Due to this inherent variability, local builds give poor continuous feedback about build times.
 Standardized CI though runs for every change and gives you a time series where numbers are directly comparable.
 
-To increase this standardization pressure of CI, I recommend following https://graydon2.dreamwidth.org/1597.html[not rocket science] rule and setting up a merge robot, which guarantees that every state of the main branch passes the CI.
+To increase this standardization pressure of CI, I recommend following https://graydon2.dreamwidth.org/1597.html[not rocket science rule] and setting up a merge robot, which guarantees that every state of the main branch passes the CI.
 https://bors.tech[bors] is a particular implementation I use, but there are others.
 
 While it's by far not the biggest reason to use something like bors, it gives two benefits for healthy compile times:
@@ -84,7 +84,7 @@ While it's by far not the biggest reason to use something like bors, it gives tw
 
 == CI Caching
 
-If you think about it, its pretty obvious how a good compilation strategy for CI should work.
+If you think about it, its pretty obvious how a good caching strategy for CI should work.
 It makes sense to cache stuff that changes rarely, but it's useless to cache frequently changing things.
 That is, cache all the dependencies, but don't cache project's own crates.
 
@@ -101,20 +101,19 @@ For GitHub actions in particular, you can also use https://github.com/Swatinem/r
 Caching is usually the low-hanging watermelon, but there are several more things to tweak.
 
 https://github.com/rust-analyzer/rust-analyzer/blob/25368d24308d6a94ffe8b99f0122bcf5a2175322/.github/workflows/ci.yaml#L11[Disable] incremental compilation.
-CI builds often are closer to from-scratch builds, as changes are typically much bigger than from local edit compile cycle.
+CI builds often are closer to from-scratch builds, as changes are typically much bigger than from a local edit-compile cycle.
 For from-scratch builds, incremental adds an extra dependency-tracking overhead.
 It also significantly increases the amount of IO and the size of `./target`, which make caching less effective.
 
-While we are at it, set `-D warning` environmental variable to deny warning for all crates at the same time.
+While we are at it, set `-D warnings` environmental variable to deny warning for all crates at the same time.
 It's a bad idea to `#![deny(warnings)]` in code: you need to repeat it for every crate, it needlessly makes local development harder, and it might break your users when they upgrade compiler.
-It might also makes sense to bump cargo network retry limits.
-If the project is pure Rust, consider https://github.com/rust-analyzer/rust-analyzer/blob/48f84a7b60bcbd7ec5fa6434d92d9e7a8eb9731b/.github/workflows/ci.yaml#L23[setting CC] to some nonsense.
+It might also make sense to bump cargo network retry limits.
 
 https://github.com/rust-analyzer/rust-analyzer/blob/48f84a7b60bcbd7ec5fa6434d92d9e7a8eb9731b/.github/workflows/ci.yaml#L56-L61[Split] CI into separate `cargo test --no-run` and `cargo test`.
 It is vital to know which part of your CI is the build, and which are the tests.
 
 https://github.com/rust-analyzer/rust-analyzer/blob/48f84a7b60bcbd7ec5fa6434d92d9e7a8eb9731b/Cargo.toml#L6-L10[Disable] debuginfo -- it makes `./target` much bigger, which again harms caching.
-Depending on your preferred workflow, you might consider disabling debug info altogether, this brings some benefits for local builds as well.
+Depending on your preferred workflow, you might consider disabling debuginfo unconditionally, this brings some benefits for local builds as well.
 
 == Read The Lockfile
 
@@ -124,7 +123,7 @@ This is nuanced: libraries do solve actual problems, and it would be stupid to r
 And it's not like it's guaranteed that your solution will be smaller.
 
 But it's important to realise what problems your application is and is not solving.
-If you are building a CLI utility for thousands people of to use, you absolutely need http://clap.rs[clap] with all of its features.
+If you are building a CLI utility for thousands of people of to use, you absolutely need http://clap.rs[clap] with all of its features.
 If you are writing a quick script to run during CI, which only the team will be using, its probably fine to start with a restricted feature set, but faster builds.
 
 One _tremendously_ useful exercise here is to read `Cargo.lock` (not `Cargo.toml`) and for each dependency think about the actual problem this dependency solves for the user of the application.
@@ -136,15 +135,15 @@ This doesn't make sense -- we have exact parsers and lexers for Rust and Markdow
 The reason why the dependency is there is because the logging library we use allows to say something like:
 
 ```
-RUST_LOG=rust-analyzer=very complex filtering expression
+RUST_LOG=rust_analyzer=very complex filtering expression
 ```
 
 where parsing of the filtering expression is done via regexes.
 
-This is undoubtedly a very useful feature for some applications, but in the context of rust-analyzer we don't need it.
+This is undoubtedly a very useful feature to have for some applications, but in the context of rust-analyzer we don't need it.
 Simple `env_logger`-style filtering would be enough.
 
-Once you identify a dependency like this, it's usually enough to tweak `features` field of dependency specification, or to send a PR upstream to make non-essential bits configurable.
+Once you identify a similar redundat dependency, it's usually enough to tweak `features` field somewhere, or to send a PR upstream to make non-essential bits configurable.
 
 Sometimes it is a bigger yak to shave which gets postponed :)
 For example, rust-analyzer optionally use `jemalloc` crate, and its build script pulls in https://docs.rs/fs_extra[`fs_extra`] and (of all the things!) https://docs.rs/paste[`paste`].
@@ -156,8 +155,8 @@ Now that we've dealt with things which are just sensible to do, it's time to sta
 A tool to use here is `timings` flag for Cargo (https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#timings[documentation]).
 Sadly, I lack the eloquence to adequately express the level of quality and polish of this feature, so let me just say ❤️ and continue with my dry prose.
 
-What this flag does is that records profiling data during the build, and then renders it as a very legible and information-dense HTML file.
-This is a nightly feature, so you'll need the ``+nightly`` flag, but this isn't a problem in practice, as you only need this once in a while.a
+This flag enableds recording of profiling data during the build, and then renders it as a very legible and information-dense HTML file.
+This is a nightly feature, so you'll need the ``+nightly`` toggle, but this isn't a problem in practice, as you only need this once in a while.
 
 Here's an example from rust-analyzer:
 
@@ -169,9 +168,92 @@ cargo +nightly build -p rust-analyzer --bin rust-analyzer \
 
 image::/assets/cargo-timings.png[]
 
+Not only you can see how long each crate took to compile, but you'll also see how the compilation was schduled, _when_ each crate started to compile.
+
 == Compilation Model: Crates
 
-== Compilation Model: Macros
+This last point is important -- crates form a direct acyclic graph of dependencies and, on the multicore CPU, the shape of this graph affects the compilation time a lot.
+
+This is slow to compile, as all the crates need to be compiled sequentially:
+
+[source]
+----
+A -> B -> C -> D -> E
+----
+
+This version is much faster, as it enables significantly more parallelism
+
+[source]
+----
+   +-  B  -+
+  /         \
+A  ->  C  ->  E
+  \         /
+   +-  D  -+
+----
+
+There's also connection between parallelism and incrementality.
+In the wide graph, changing `B` doesn't entail recompiling `C` or `D`.
+
+The first advice you get when complaining about compile times in Rust is: "`split the code into crates`".
+It is not _that_ easy -- if you ended up with a graph like the first one, you are not wining much.
+It is important to architect the applications to look like the second picture -- a common vocabulary crate, a number of independent featurs, a leaf crate that ties everything together.
+The most imortant property of a crate is which crates it doesn't (transitively) depend on
+
+== Compilation Model: Macros And Pipelining
+
+But Cargo is even smarter than that!
+It can do pipelined compilation -- splitting the compilation of a crate into metadata and codegen phases, and starting compilation of dependent crate as soon as the metada phase is over.
+
+This has interesting interactions with procedural macros (and build scripts).
+`rustc` needs to run procedural macros to compute crate's metadata.
+That means that procedural macros can't be pipelined, and crates using procedural macros are blocked while they are being compiled.
+
+Separately from that, procedural macros need to parse Rust code, and that is a relatively complex task.
+The de-facto crate for this, `syn`, takes quite some time to compile (not because it is bloated -- just because parsing Rust is hard).
+
+This generally means that projects tend to have `syn` / `serde` shaped whole in the CPU utilization graph during compilation.
+It's relatively important to use procedural macros only where they pull their weight, and try to push crates before `syn` in the `cargo -Z timings` graph.
+
+The latter can be tricky, as proc macro dependencies can sneak up on you.
+The problem here is that they are often hidden behind the feature flags, and those feature flags might be enabled by downstream crates.
+Consider this exalple:
+
+You have a convenient utility type -- for example, an SSO string, in a `small_string` crate.
+To implement serialization, you don't actually need dervie (just delegating to `String` works), so you add an (optional) dependency on `serde`:
+
+[source,TOML]
+----
+[package]
+name = "small-string"
+
+[dependencies]
+serde = { version = "1" }
+----
+
+SSO sting is a rather useful abstraction, so it get used acros the codebase.
+Then in some leaf crate which, eg, needs to expose JSON API, you add dependency on `small_string` with the `serde` feature, as well as `serde` with derive itself:
+
+[source,TOML]
+----
+[package]
+name = "json-api"
+
+[dependencies]
+small-string = { version = "1", features = [ "serde" ] }
+serde = { version = "1", features = [ "derive" ] }
+----
+
+The problem here is that `json-api` enables the `dervie` feature of `serde`, and that means that `small-string` and all of its reverse-dependencies now need to wait for `syn` to compile!
+Similiarly, if a crate depends on a subset of `syn`'s features, but something else in the crate graph enables all of `syn`'s features, the original crate gets them as a bonus as well!
+
+It's not necessary the end of the world, but it shows that dependency graph can get tricky with the presense of features.
+Luckily, `cargo -Z timings` makes it easy to notice that something strange is happening, even if it might not be always obvious what exactly went wrong.
+
+An interesting side-note here is that procedural macros are not _inherently_ slow to compile.
+Rather, it's the fact that most proc macros need to parse Rust that makes them slow.
+Sometimes, a macro can accept a simplified syntax which can be parsed without `syn`, and emit Rust code based on that.
+Producing valid Rust is not nearly as complicated as parsing it!
 
 == Compilation Model: Monomorphisation
 
