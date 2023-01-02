@@ -1,0 +1,12 @@
+{
+    "imports": {
+        "file:///home/matklad/p/matklad.github.io/djot.js/src/ast": "file:///home/matklad/p/matklad.github.io/djot.js/src/ast.ts",
+        "file:///home/matklad/p/matklad.github.io/djot.js/src/attributes": "file:///home/matklad/p/matklad.github.io/djot.js/src/attributes.ts",
+        "file:///home/matklad/p/matklad.github.io/djot.js/src/event": "file:///home/matklad/p/matklad.github.io/djot.js/src/event.ts",
+        "file:///home/matklad/p/matklad.github.io/djot.js/src/html": "file:///home/matklad/p/matklad.github.io/djot.js/src/html.ts",
+        "file:///home/matklad/p/matklad.github.io/djot.js/src/inline": "file:///home/matklad/p/matklad.github.io/djot.js/src/inline.ts",
+        "file:///home/matklad/p/matklad.github.io/djot.js/src/find": "file:///home/matklad/p/matklad.github.io/djot.js/src/find.ts",
+        "file:///home/matklad/p/matklad.github.io/djot.js/src/filter": "file:///home/matklad/p/matklad.github.io/djot.js/src/filter.ts",
+        "file:///home/matklad/p/matklad.github.io/djot.js/src/block": "file:///home/matklad/p/matklad.github.io/djot.js/src/block.ts"
+    }
+}

@@ -3,169 +3,181 @@ import { std } from "./deps.ts";
 import { highlight } from "./highlight.ts";
 import { html, HtmlString, time } from "./templates.ts";
 
-export async function parse(source: string): Promise<Node> {
-  const proc = Deno.run({
-    cmd: ["lua", "bin/main.lua", "-a", "-j"],
-    cwd: "./djot",
-    stdin: "piped",
-    stdout: "piped",
-  });
-  const writer = async () => {
-    await std.streams.writeAll(proc.stdin, new TextEncoder().encode(source));
-    proc.stdin.close();
-  };
-  const reader = std.streams.readAll(proc.stdout);
-  const [_, bytes] = await Promise.all([writer(), reader]);
-  await proc.status();
-  const text = new TextDecoder().decode(bytes);
-  const ast = JSON.parse(text);
-  return Node.new_root(ast);
+import * as djot from "./djot.js/src/index.ts";
+import {
+  AstNode,
+  Doc,
+  getStringContent,
+  Para,
+  Section,
+} from "./djot.js/src/ast.ts";
+export { getStringContent };
+
+export function parse(source: string): Doc {
+  return djot.parse(source);
 }
 
-export function render(node: Node, ctx: any): HtmlString {
+function has_class(node: AstNode, cls: string): boolean {
+  return node.attributes?.["class"]?.split(" ")?.includes(cls) ?? false;
+}
+
+export function render(node: Doc, ctx: any): HtmlString {
+  let current_section: Section | undefined = undefined;
   try {
-    return node.withContext(ctx).render();
+    const result = djot.renderHTML(node, {
+      overrides: {
+        section(node, r) {
+          const old_section = current_section;
+          current_section = node;
+          for (const child of node.children) {
+            if (child.tag == "heading" && child.level == 1) {
+              r.renderChildren(node);
+              return;
+            }
+          }
+          r.renderAstNodeDefault(node);
+          current_section = old_section;
+        },
+        heading(node, r) {
+          if (node.level == 1 && ctx.date) {
+            node.children.push({
+              tag: "raw_inline",
+              format: "html",
+              text: time(ctx.date).value,
+            });
+          }
+          if (current_section && node.level > 1) {
+            if (node == current_section.children[0]) {
+              const id = current_section.attributes?.id;
+              if (id) {
+                node.children = [{
+                  tag: "link",
+                  destination: `#${id}`,
+                  children: node.children,
+                }];
+              }
+            }
+          }
+          r.renderAstNodeDefault(node);
+        },
+        para: (node, r) => {
+          if (!ctx.summary) ctx.summary = getStringContent(node);
+          if (node.children.length == 1 && node.children[0].tag == "image") {
+            r.renderTag("figure", node);
+            const cap = node.attributes?.cap;
+            if (cap) {
+              r.literal('<figcaption class="title">');
+              r.out(cap);
+              r.literal("</figcaption>");
+            }
+            r.renderChildren(node);
+            r.renderCloseTag("figure");
+            return;
+          }
+          r.renderAstNodeDefault(node);
+        },
+        list: (node, r) => {
+          if (node.style == "1)") {
+            const attributes = node.attributes ?? {};
+            const cls = attributes["class"] ?? "";
+            attributes["class"] = `${cls} callout`;
+            node.attributes = attributes;
+          }
+          r.renderAstNodeDefault(node);
+        },
+        div: (node, r) => {
+          let admon_icon = "";
+          if (has_class(node, "note")) admon_icon = "info-circle";
+          if (has_class(node, "quiz")) admon_icon = "question-circle";
+          if (has_class(node, "warn")) admon_icon = "exclamation-circle";
+
+          if (admon_icon) {
+            r.renderTag("aside", node, { "class": "admn" });
+            r.literal(`<i class="fa fa-${admon_icon}"></i>`);
+            r.literal("<div>");
+            r.renderChildren(node);
+            r.literal("</div>");
+            r.renderCloseTag("aside");
+            return;
+          }
+
+          if (has_class(node, "block")) {
+            r.renderTag("aside", node, { "class": "block" });
+            const cap = node.attributes?.cap;
+            if (cap) {
+              r.literal('<div class="title">');
+              r.out(cap);
+              r.literal("</div>");
+            }
+            r.renderChildren(node);
+            r.renderCloseTag("aside");
+            return;
+          }
+
+          if (has_class(node, "details")) {
+            r.renderTag("details", node);
+            r.literal("<summary>");
+            r.out(node.attributes?.cap ?? "");
+            r.literal("</summary>");
+            r.renderChildren(node);
+            r.renderCloseTag("details");
+            return;
+          }
+
+          r.renderAstNodeDefault(node);
+        },
+        code_block: (node, r) => {
+          r.renderTag("figure", node, { "class": "code-block" });
+          const cap = node.attributes?.cap;
+          if (cap) {
+            r.literal('<figcaption class="title">');
+            r.out(cap);
+            r.literal("</figcaption>");
+          }
+          r.literal(
+            highlight(
+              node.text,
+              node.lang,
+              node.attributes?.highlight,
+            ).value,
+          );
+          r.renderCloseTag("figure");
+        },
+        blockquote: (node, r) => {
+          let source = undefined;
+          if (node.children.length > 0) {
+            const last_child = node.children[node.children.length - 1];
+            const children = (<Para> last_child).children;
+            if (
+              children.length == 1 &&
+              children[0].tag == "link"
+            ) {
+              source = children[0];
+              children.pop();
+            }
+          }
+
+          r.renderTag("figure", node, { class: "blockquote" });
+          r.literal("<blockquote>");
+          r.renderChildren(node);
+          r.literal("</blockquote>");
+          if (source) {
+            r.literal("<figcaption><cite>");
+            r.renderAstNode(source);
+            r.literal("</cite></figcaption>");
+          }
+          r.renderCloseTag("figure");
+        },
+      },
+    });
+
+    return new HtmlString(result);
   } catch (e) {
     return html`Error: ${e}`;
   }
 }
 
 const visitor: { [key: string]: (node: Node) => HtmlString } = {
-  doc: (node) => node.content,
-  section: (node) => {
-    if (node.child("heading")?.ast?.level == 1) {
-      return node.content;
-    }
-    return html`<section>${node.content}</section>`;
-  },
-  heading: (node) => {
-    const tag = `h${node.ast.level}`;
-    const date = node.ast.level == 1 && node.ctx.date
-      ? time(node.ctx.date)
-      : undefined;
-    const id = node.parent?.ast?.attr?.id;
-    if (id) {
-      return html`
-<${tag} id="${id}"${node.class_attr}>
-<a href="#${id}">${node.content} ${date}</a>
-</${tag}>\n`;
-    } else {
-      return html`\n<${tag}${node.class_attr}>${node.content} ${date}</${tag}>\n`;
-    }
-  },
-  list: (node) => {
-    const list_style = node.ast.list_style;
-    let tag = "ol";
-    if ("-+*".includes(list_style)) tag = "ul";
-    if (list_style === ":") tag = "dl";
-    let type = "";
-    if (list_style === "a.") type = ' type="a"';
-    if (list_style === "i.") type = ' type="i"';
-    const cls = list_style === "1)"
-      ? node.class_attr_extra("callout")
-      : node.class_attr;
-    return html`\n<${tag} ${cls}${type}>${node.content}</${tag}>\n`;
-  },
-  list_item: (node) => html`  <li>${node.content}</li>\n`,
-  definition_list_item: (node) => node.content,
-  term: (node) => html`  <dt>${node.content}</dt>\n`,
-  definition: (node) => html`  <dd>${node.content}</dd>\n`,
-  para: (node) => {
-    // if (node.parent?.tag === "list_item" && node.parent?.parent?.ast?.tight) {
-    //   return node.content;
-    // }
-    if (!node.ctx.summary) node.ctx.summary = node.content;
-    if (node.children.length == 1 && node.children[0].tag == "image") {
-      const cap = node.ast.attr?.cap
-        ? html`<figcaption class="title">${node.ast.attr.cap}</figcaption>\n`
-        : "\n";
-
-      return html`\n<figure${node.class_attr}>${cap}${node.content}</figure>\n`;
-    }
-    return html`\n<p${node.class_attr}>${node.content}</p>\n`;
-  },
-  blockquote: (node) => {
-    const children = [...node.children];
-    let source = undefined;
-    if (children.length > 0) {
-      const last_child = children[children.length - 1];
-      if (
-        last_child.children.length == 1 && last_child.children[0].tag == "link"
-      ) {
-        source = last_child.children[0];
-        children.pop();
-      }
-    }
-    const cite = source
-      ? html`<figcaption><cite>${source.render()}</cite></figcaption>`
-      : "";
-
-    return html`
-<figure class="blockquote">
-<blockquote>${children.map((it) => it.render())}</blockquote>
-${cite}
-</figure>\n`;
-  },
-  div: (node) => {
-    let admon_icon = "";
-    if (node.cls.includes("note")) admon_icon = "info-circle";
-    if (node.cls.includes("quiz")) admon_icon = "question-circle";
-    if (node.cls.includes("warn")) admon_icon = "exclamation-circle";
-    if (admon_icon) {
-      return html`
-<aside class="admn">
-  <i class="fa fa-${admon_icon}"></i>
-  <div>${node.content}</div>
-</aside>`;
-    }
-
-    if (node.cls.includes("block")) {
-      const cap = node.ast.attr?.cap
-        ? html`<div class="title">${node.ast.attr.cap}</div>\n`
-        : "\n";
-      return html`
-<aside class="block">
-${cap}
-${node.content}
-</aside>
-`;
-    }
-
-    if (node.cls.includes("details")) {
-      return html`
-<details>
-<summary>${node.ast.attr?.cap}</summary>
-${node.content}
-</details>
-`;
-    }
-
-    return html`<div${node.class_attr}>${node.content}</div>`;
-  },
-  code_block: (node) => {
-    const cap = node.ast.attr?.cap
-      ? html`<figcaption class="title">${node.ast.attr.cap}</figcaption>\n`
-      : "\n";
-    const pre = highlight(node.text, node.ast.lang, node.ast.attr?.highlight);
-    return html`
-<figure class="code-block">
-${cap}${pre}
-</figure>`;
-  },
-  raw_block: (node) => {
-    if (node.ast.format == "html") return new HtmlString(node.text);
-    return html``;
-  },
-  table: (node) => html`<table>${node.content}</table>`,
-  row: (node) => html`<tr>${node.content}</tr>`,
-  cell: (node) => html`<td>${node.content}</td>`,
-  verbatim: (node) => html`<code>${node.text}</code>`,
-  link: (node) => {
-    const href = node.ast.reference
-      ? node.references[node.ast.reference].destination
-      : node.ast.destination;
-    return html`<a href="${href}">${node.content}</a>`;
-  },
   image: (node) => {
     const href = node.ast.reference
       ? node.references[node.ast.reference].destination
@@ -180,10 +192,6 @@ ${cap}${pre}
     }
   },
   reference_definition: (_node) => html``,
-  url: (node) =>
-    html`<a class="url" href="${node.ast.destination}">${node.ast.destination}</a>`,
-  double_quoted: (node) => html`“${node.content}”`,
-  single_quoted: (node) => html`‘${node.content}’`,
   span: (node) => {
     if (node.cls.includes("kbd")) {
       let first = true;
@@ -204,14 +212,6 @@ ${cap}${pre}
     }
     throw `unhandled node: ${JSON.stringify(node.ast)}`;
   },
-  emph: (node) => html`<em>${node.content}</em>`,
-  strong: (node) => html`<strong>${node.content}</strong>`,
-  superscript: (node) => html`<sup>${node.content}</sup>`,
-  delete: (node) => html`<del>${node.content}</del>`,
-  thematic_break: (_node) => html`<hr />`,
-  str: (node) => html`${node.text}`,
-  nbsp: (_node) => new HtmlString("&nbsp;"),
-  hardbreak: (_node) => html`<br>\n`,
 };
 
 const substs: Record<string, string> = {

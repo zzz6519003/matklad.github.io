@@ -152,8 +152,16 @@ async function collect_posts(ctx: Ctx): Promise<Post[]> {
     const html = djot.render(ast, render_ctx);
     ctx.render_ms += performance.now() - t;
 
-    const title = ast.child("section")?.child("heading")?.content ??
-      new HtmlString("untitled");
+    let title = new HtmlString("untitled");
+    for (const doc_child of ast.children) {
+      if (doc_child.tag == "section") {
+        for (const section_child of doc_child.children) {
+          if (section_child.tag == "heading") {
+            title = new HtmlString(djot.getStringContent(section_child))
+          }
+        }
+      }
+    }
     return {
       year,
       month,
