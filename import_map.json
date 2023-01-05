@@ -2,17 +2,18 @@
     "imports": {
         "std/": "https://deno.land/std@0.161.0/",
         "highlightjs/": "https://unpkg.com/@highlightjs/cdn-assets@11.6.0/es/",
-        
-        "djot/": "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/",
-        "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/ast": "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/ast.ts",
-        "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/attributes": "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/attributes.ts",
-        "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/event": "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/event.ts",
-        "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/html": "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/html.ts",
-        "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/inline": "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/inline.ts",
-        "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/find": "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/find.ts",
-        "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/filter": "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/filter.ts",
-        "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/block": "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/block.ts",
-        "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/parse": "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/parse.ts",
-        "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/pandoc": "https://raw.githubusercontent.com/jgm/djot.js/d06cffff1672aa48ed822a95b92b7bcd6907aaac/src/pandoc.ts"
+
+        "djot/": "file:///home/matklad/p/djot.js/src/",
+        "file:///home/matklad/p/djot.js/src/ast": "file:///home/matklad/p/djot.js/src/ast.ts",
+        "file:///home/matklad/p/djot.js/src/attributes": "file:///home/matklad/p/djot.js/src/attributes.ts",
+        "file:///home/matklad/p/djot.js/src/event": "file:///home/matklad/p/djot.js/src/event.ts",
+        "file:///home/matklad/p/djot.js/src/html": "file:///home/matklad/p/djot.js/src/html.ts",
+        "file:///home/matklad/p/djot.js/src/inline": "file:///home/matklad/p/djot.js/src/inline.ts",
+        "file:///home/matklad/p/djot.js/src/find": "file:///home/matklad/p/djot.js/src/find.ts",
+        "file:///home/matklad/p/djot.js/src/filter": "file:///home/matklad/p/djot.js/src/filter.ts",
+        "file:///home/matklad/p/djot.js/src/block": "file:///home/matklad/p/djot.js/src/block.ts",
+        "file:///home/matklad/p/djot.js/src/parse": "file:///home/matklad/p/djot.js/src/parse.ts",
+        "file:///home/matklad/p/djot.js/src/pandoc": "file:///home/matklad/p/djot.js/src/pandoc.ts",
+        "file:///home/matklad/p/djot.js/src/djot-renderer": "file:///home/matklad/p/djot.js/src/djot-renderer.ts"
     }
 }
