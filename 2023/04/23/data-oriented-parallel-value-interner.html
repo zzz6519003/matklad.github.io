@@ -1,0 +1,652 @@
+
+<!DOCTYPE html>
+<html lang='en-US'>
+<head>
+  <meta charset='utf-8'>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Data Oriented Parallel Value Interner</title>
+  <meta name="description" content="In this post, I will present a theoretical design for an interner.
+It should be fast, but there will be no benchmarks as I haven't implemented the thing.
+So it might actually be completely broken or super slow for one reason or another.
+Still, I think there are a couple of neat ideas, which I would love to call out.">
+  <link rel="icon" href="/favicon.png" type="image/png">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="canonical" href="https://matklad.github.io/2023/04/23/data-oriented-parallel-value-interner.html">
+  <link rel="alternate" type="application/rss+xml" title="matklad" href="https://matklad.github.io/feed.xml">
+  <style>
+  @font-face {
+    font-family: 'Open Sans'; src: url('/css/OpenSans-300-Normal.woff2') format('woff2');
+    font-weight: 300; font-style: normal;
+  }
+  @font-face {
+    font-family: 'JetBrains Mono'; src: url('/css/JetBrainsMono-400-Normal.woff2') format('woff2');
+    font-weight: 400; font-style: normal;
+  }
+  @font-face {
+    font-family: 'JetBrains Mono'; src: url('/css/JetBrainsMono-700-Normal.woff2') format('woff2');
+    font-weight: 700; font-style: normal;
+  }
+  @font-face {
+    font-family: 'EB Garamond'; src: url('/css/EBGaramond-400-Normal.woff2') format('woff2');
+    font-weight: 400; font-style: normal;
+  }
+  @font-face {
+    font-family: 'EB Garamond'; src: url('/css/EBGaramond-400-Italic.woff2') format('woff2');
+    font-weight: 400; font-style: italic;
+  }
+  @font-face {
+    font-family: 'EB Garamond'; src: url('/css/EBGaramond-700-Normal.woff2') format('woff2');
+    font-weight: 700; font-style: normal;
+  }
+  @font-face {
+    font-family: 'EB Garamond'; src: url('/css/EBGaramond-700-Italic.woff2') format('woff2');
+    font-weight: 700; font-style: italic;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; margin-block-start: 0; margin-block-end: 0; }
+
+  body {
+    max-width: 80ch;
+    padding: 2ch;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  header { margin-bottom: 2rem; }
+  header > nav { display: flex; column-gap: 2ch; align-items: baseline; flex-wrap: wrap; }
+  header a { font-style: normal; color: rgba(0, 0, 0, .8); text-decoration: none; }
+  header a:hover { color: rgba(0, 0, 0, .8); text-decoration: underline; }
+  header .title { font-size: 1.25em; flex-grow: 2; }
+
+  footer { margin-top: 2rem; }
+  footer > p { display: flex; column-gap: 2ch; justify-content: center; flex-wrap: wrap; }
+  footer a { color: rgba(0, 0, 0, .8); text-decoration: none; white-space: nowrap; }
+  footer i { vertical-align: middle; color: rgba(0, 0, 0, .8) }
+
+  </style>
+
+  <link rel="stylesheet" href="/css/main.css">
+  
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.4.0/css/font-awesome.min.css">
+</head>
+
+<body>
+  <header>
+    <nav>
+      <a class="title" href="/">matklad</a>
+      <a href="/about.html">About</a>
+      <a href="/resume.html">Resume</a>
+      <a href="/links.html">Links</a>
+    </nav>
+  </header>
+
+  <main>
+  <article >
+
+    <h1>
+    <a href="#Data-Oriented-Parallel-Value-Interner">Data Oriented Parallel Value Interner <time datetime="2023-04-23">Apr 23, 2023</time></a>
+    </h1>
+<p>In this post, I will present a theoretical design for an interner.
+It should be fast, but there will be no benchmarks as I haven&rsquo;t implemented the thing.
+So it might actually be completely broken or super slow for one reason or another.
+Still, I think there are a couple of neat ideas, which I would love to call out.</p>
+<p>The context for the post is <a href="https://www.youtube.com/watch?v=AqDdWEiSwMM">this talk</a> by Andrew Kelley, which notices that it&rsquo;s hard to reconcile interning and parallel compilation.
+This is something I have been thinking about a lot in the context of rust-analyzer, which relies heavily on pointers, atomic reference counting and indirection to make incremental and parallel computation possible.</p>
+<p>And yes, interning (or, more generally, assigning unique identities to things) is a big part of that.</p>
+<p>Usually, compilers intern strings, but we will be interning trees today.
+Specifically, we will be looking at something like a <a href="https://github.com/ziglang/zig/blob/b95cdf0aeb4d4d31c0b6a54302ef61baec8f6773/src/value.zig#L20"><code>Value</code></a> type from the Zig compiler.
+In a simplified RAII style it could look like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">const</span> Value = <span class="hl-keyword">union</span>(<span class="hl-keyword">enum</span>) {</code>
+<code>    <span class="hl-comment">// A bunch of payload-less variants.</span></code>
+<code>    u1_type,</code>
+<code>    u8_type,</code>
+<code>    i8_type,</code>
+<code></code>
+<code>    <span class="hl-comment">// A number.</span></code>
+<code>    <span class="hl-type">u64</span>: <span class="hl-type">u64</span>,</code>
+<code></code>
+<code>    <span class="hl-comment">// A declaration.</span></code>
+<code>    <span class="hl-comment">// Declarations and types are also values in Zig.</span></code>
+<code>    decl: DeclIndex,</code>
+<code></code>
+<code>    <span class="hl-comment">// Just some bytes for a string.</span></code>
+<code>    bytes: []<span class="hl-type">u8</span>,</code>
+<code></code>
+<code>    <span class="hl-comment">// The interesting case which makes it a tree.</span></code>
+<code>    <span class="hl-comment">// This is how struct instances are represented.</span></code>
+<code>    aggregate: []Value,</code>
+<code>};</code>
+<code></code>
+<code><span class="hl-keyword">const</span> DeclIndex = <span class="hl-type">u32</span>;</code></pre>
+
+</figure>
+<p>Such values are individually heap-allocated and in general are held behind pointers.
+Zig&rsquo;s compiler adds a couple of extra tricks to this structure, like not overallocating for small enum variants:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">const</span> Value = <span class="hl-keyword">struct</span> {</code>
+<code>    payload: <span class="hl-operator">*</span>Payload</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-comment">// Payload is an &quot;abstract&quot; type:</span></code>
+<code><span class="hl-comment">// There&#x27;s some data following the `tag`,</span></code>
+<code><span class="hl-comment">// whose type and size is determined by</span></code>
+<code><span class="hl-comment">// this `tag`.</span></code>
+<code><span class="hl-keyword">const</span> Payload = <span class="hl-keyword">struct</span> {</code>
+<code>    tag: Tag,</code>
+<code></code>
+<code>    <span class="hl-keyword">pub</span> <span class="hl-keyword">const</span> U64 = <span class="hl-keyword">struct</span> {</code>
+<code>        base: Payload,</code>
+<code>        data: <span class="hl-type">u64</span>,</code>
+<code>    };</code>
+<code></code>
+<code>    <span class="hl-keyword">pub</span> <span class="hl-keyword">const</span> Decl = <span class="hl-keyword">struct</span> {</code>
+<code>        base: Payload,</code>
+<code>        decl: DeclIndex,</code>
+<code>    };</code>
+<code>}</code></pre>
+
+</figure>
+<p>But how do we intern this stuff, such that:</p>
+<ul>
+<li>
+values are just <code>u32</code> rather than full pointers,
+</li>
+<li>
+values are deduplicated,
+</li>
+<li>
+and this whole construct works efficiently even if there are multiple threads
+using our interner simultaneously?
+</li>
+</ul>
+<p>Let&rsquo;s start with concurrent <code>SegmentedList</code>:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span><span class="hl-function"> SegmentList</span>(<span class="hl-keyword">comptime</span> T: <span class="hl-type">type</span>) <span class="hl-type">type</span> {</code>
+<code>    <span class="hl-keyword">return</span> <span class="hl-keyword">struct</span> {</code>
+<code>        echelons: [<span class="hl-numbers">31</span>]?[<span class="hl-operator">*</span>]T,</code>
+<code>    };</code>
+<code>}</code></pre>
+
+</figure>
+<p>Segmented list is like <code>ArrayList</code> with an extra super power that pushing new items does not move/invalidate old ones.
+In normal <code>ArrayList</code>, when the backing storage fills up, you allocate a slice twice as long, copy over the elements from the old slice and then destroy it.
+In <code>SegmentList</code>, you leave the old slice where it is, and just allocate a new one.</p>
+<p>Now, as we are writing an interner and want to use <code>u32</code> for an index, we know that we need to store <code>1&lt;&lt;32</code> items max.
+But that means that we&rsquo;ll need at most 31 segments for our <code>SegmentList</code>:</p>
+
+<figure class="code-block">
+
+
+<pre><code>[1 &lt;&lt; 0]T</code>
+<code>[1 &lt;&lt; 1]T</code>
+<code>[1 &lt;&lt; 2]T</code>
+<code>...</code>
+<code>[1 &lt;&lt; 31]T</code></pre>
+
+</figure>
+<p>So we can just &ldquo;pre-allocate&rdquo; array of 31 <em>pointers</em> to the segments, hence</p>
+
+<figure class="code-block">
+
+
+<pre><code>echelons: [<span class="hl-numbers">31</span>]?[<span class="hl-operator">*</span>]T,</code></pre>
+
+</figure>
+<p>If we want to be more precise with types, we can even use a tuple whose elements are nullable pointers to arrays of power-of-two sizes:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span><span class="hl-function"> SegmentList</span>(<span class="hl-keyword">comptime</span> T: <span class="hl-type">type</span>) <span class="hl-type">type</span> {</code>
+<code>    <span class="hl-keyword">return</span> <span class="hl-keyword">struct</span> {</code>
+<code>        echelons: std.meta.Tuple(get_echelons(<span class="hl-numbers">31</span>, T)),</code>
+<code>    };</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">fn</span><span class="hl-function"> get_echelons</span>(</code>
+<code>    <span class="hl-keyword">comptime</span> level: <span class="hl-type">usize</span>,</code>
+<code>    <span class="hl-keyword">comptime</span> T: <span class="hl-type">type</span>,</code>
+<code>) []<span class="hl-keyword">const</span> <span class="hl-type">type</span> {</code>
+<code>    <span class="hl-keyword">if</span> (level <span class="hl-operator">==</span> <span class="hl-numbers">0</span>) <span class="hl-keyword">return</span> <span class="hl-operator">&amp;</span>.{ ?<span class="hl-operator">*</span>[<span class="hl-numbers">1</span>]T };</code>
+<code>    <span class="hl-keyword">return</span> get_echelons(level <span class="hl-operator">-</span> <span class="hl-numbers">1</span>, T) <span class="hl-operator">+</span><span class="hl-operator">+</span> .{ ?<span class="hl-operator">*</span>[<span class="hl-numbers">1</span> <span class="hl-operator">&lt;&lt;</span> level]T };</code>
+<code>}</code></pre>
+
+</figure>
+<p>Indexing into such an echeloned array is still O(1).
+Here&rsquo;s how echelons look in terms of indexes</p>
+
+<figure class="code-block">
+
+
+<pre><code>0                      = 1  total</code>
+<code>1 2                    = 3  total</code>
+<code>3 4 5 6                = 7  total</code>
+<code>7 8 9 10 11 12 13 14   = 15 total</code></pre>
+
+</figure>
+<p>The first <code>n</code> echelons hold <code>2**n - 1</code> elements.
+So, if we want to find the <code>i</code>th item, we first find the echelon it is in, by computing the nearest smaller power of two of <code>i + 1</code>, and then index into the echelon with <code>i - (2**n - 1)</code>, give or take a <code>+1</code> here or there.</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-comment">// Warning: untested, probably has a couple of bugs.</span></code>
+<code></code>
+<code><span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span><span class="hl-function"> get</span>(self: Self, index: <span class="hl-type">u32</span>) <span class="hl-operator">*</span><span class="hl-keyword">const</span> T {</code>
+<code>    <span class="hl-keyword">const</span> e = self.get_echelon(index);</code>
+<code>    <span class="hl-keyword">const</span> i = index <span class="hl-operator">-</span> (<span class="hl-numbers">1</span> <span class="hl-operator">&lt;&lt;</span> e <span class="hl-operator">-</span> <span class="hl-numbers">1</span>);</code>
+<code>    <span class="hl-keyword">return</span> <span class="hl-operator">&amp;</span>self.echelons[e].?[i];</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">fn</span><span class="hl-function"> get_echelon</span>(index: <span class="hl-type">u32</span>) <span class="hl-type">u5</span> {</code>
+<code>    <span class="hl-built_in">@ctz</span>(std.math.floorPowerOfTwo(index <span class="hl-operator">+</span> <span class="hl-numbers">1</span>));</code>
+<code>}</code></pre>
+
+</figure>
+<p>Note that we pre-allocate an array of pointers to segments, but not the segments themselves.
+Pointers are nullable, and we allocate new segments lazily, when we actually write to the corresponding indexes.
+This structure is very friendly to parallel code.
+Reading items works because items are never reallocated.
+Lazily allocating new echelons is easy, because the position of the pointer is fixed.
+That is, we can do something like this to insert an item at position <code>i</code>:</p>
+<ol>
+<li>
+compute the echelon index
+</li>
+<li>
+<code>@atomicLoad(.Acquire)</code> the pointer
+</li>
+<li>
+if the pointer is null
+<ul>
+<li>
+allocate the echelon
+</li>
+<li>
+<code>@cmpxchgStrong(.Acquire, .Release)</code> the pointer
+</li>
+<li>
+free the redundant echelon if exchange failed
+</li>
+</ul>
+</li>
+<li>
+insert the item
+</li>
+</ol>
+<p>Notice how we don&rsquo;t need any locks or even complicated atomics, at the price of sometimes doing a second redundant allocation.</p>
+<p>One thing this data structure is bad at is doing bounds checks and tracking which items are actually initialized.
+For the interner use-case, we will rely on an invariant that we always use indexes provided to use by someone else, such that possession of the index signifies that:</p>
+<ul>
+<li>
+the echelon holding the item is allocated
+</li>
+<li>
+the item itself is initialized
+</li>
+<li>
+there&rsquo;s the relevant happens-before established
+</li>
+</ul>
+<p>If, instead, we manufacture an index out of thin air, we might hit all kinds of nasty behavior without any bullet-proof way to check that.</p>
+<p>Okay, now that we have this <code>SegmentList</code>, how would we use them?</p>
+<p>Recall that our simplified value is</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">const</span> Value = <span class="hl-keyword">union</span>(<span class="hl-keyword">enum</span>) {</code>
+<code>    <span class="hl-comment">// A bunch of payload-less variants.</span></code>
+<code>    u1_type,</code>
+<code>    u8_type,</code>
+<code>    i8_type,</code>
+<code></code>
+<code>    <span class="hl-comment">// A number.</span></code>
+<code>    <span class="hl-type">u64</span>: <span class="hl-type">u64</span>,</code>
+<code></code>
+<code>    <span class="hl-comment">// A declaration.</span></code>
+<code>    <span class="hl-comment">// Declarations and types are also values in Zig.</span></code>
+<code>    decl: Decl,</code>
+<code></code>
+<code>    <span class="hl-comment">// Just some bytes for a string.</span></code>
+<code>    bytes: []<span class="hl-type">u8</span>,</code>
+<code></code>
+<code>    <span class="hl-comment">// The interesting case which makes it a tree.</span></code>
+<code>    <span class="hl-comment">// This is how struct instances are represented.</span></code>
+<code>    aggregate: []Value,</code>
+<code>};</code>
+<code></code>
+<code><span class="hl-comment">// Index of a declaration.</span></code>
+<code><span class="hl-keyword">const</span> Decl = <span class="hl-type">u32</span>;</code></pre>
+
+</figure>
+<p>Of course we will struct-of-array it now, to arrive at something like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">const</span> Value = <span class="hl-type">u32</span>;</code>
+<code></code>
+<code><span class="hl-keyword">const</span> Tag = <span class="hl-keyword">enum</span>(<span class="hl-type">u8</span>) {</code>
+<code>    u1_type, u8_type, i8_type,</code>
+<code>    <span class="hl-type">u64</span>, decl, bytes, aggregate,</code>
+<code>};</code>
+<code></code>
+<code><span class="hl-keyword">const</span> ValueTable = <span class="hl-keyword">struct</span> {</code>
+<code>    tag: SegmentList(Tag),</code>
+<code>    data: SegmentList(<span class="hl-type">u32</span>),</code>
+<code></code>
+<code>    <span class="hl-type">u64</span>: SegmentList(<span class="hl-type">u64</span>),</code>
+<code>    aggregate: SegmentList([]Value),</code>
+<code>    bytes: SegmentList([]<span class="hl-type">u8</span>),</code>
+<code>};</code></pre>
+
+</figure>
+<p>A <code>Value</code> is now an index.
+This index works for two fields of <code>ValueTable</code>, <code>tag</code> and <code>data</code>.
+That is, the index addresses five bytes of payload, which is all that is needed for small values.
+For large tags like <code>aggregate</code>, the <code>data</code> field stores an index into the corresponding payload <code>SegmentList</code>.</p>
+<p>That is, every value allocates a <code>tag</code> and <code>data</code> elements, but only actual <code>u64</code>s occupy a slot in <code>u64</code> <code>SegmentList</code>.</p>
+<p>So now we can write a <code>lookup</code> function which takes a value index and reconstructs a value from pieces:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">const</span> ValueFull = <span class="hl-keyword">union</span>(<span class="hl-keyword">enum</span>) {</code>
+<code>    u1_type,</code>
+<code>    u8_type,</code>
+<code>    i8_type,</code>
+<code>    <span class="hl-type">u64</span>: <span class="hl-type">u64</span>,</code>
+<code>    decl: Decl,</code>
+<code>    bytes: []<span class="hl-type">u8</span>,</code>
+<code>    aggregate: []Value,</code>
+<code>};</code>
+<code></code>
+<code><span class="hl-keyword">fn</span><span class="hl-function"> lookup</span>(self: Self, value: Value) ValueFull {</code>
+<code>    <span class="hl-keyword">const</span> tag = self.tag.get(value);</code>
+<code>    <span class="hl-keyword">switch</span> (tag) {</code>
+<code>        .aggregate =&gt; <span class="hl-keyword">return</span> ValueFull{</code>
+<code>            .aggregate = self.aggregate.get(self.data(value)),</code>
+<code>        },</code>
+<code>    }</code>
+<code>}</code></pre>
+
+</figure>
+<p>Note that here <code>ValueFull</code> is non-owning type, it is a <em>reference</em> into the actual data.
+Note as well that aggregates now store a slice of indexes, rather than a slice of pointers.</p>
+<p>Now let&rsquo;s deal with creating and interning values.
+We start by creating a <code>ValueFull</code> using data owned by us
+(e.g. if we are creating an aggregate, we may use a stack-allocated array as a backing store for <code>[]Value</code> slice).
+Then we ask <code>ValueTable</code> to intern the data:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span><span class="hl-function"> intern</span>(self: <span class="hl-operator">*</span>Self, value_full: ValueFull) Value {</code>
+<code>}</code></pre>
+
+</figure>
+<p>If the table already contains an equal value, its index is returned.
+Otherwise, the table <em>copies</em> <code>ValueFull</code> data such that it is owned by the table itself, and returns a freshly allocated index.</p>
+<p>For bookkeeping, we&rsquo;ll need a hash table with existing values and a counter to use for a fresh index, something like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">const</span> ValueTable = <span class="hl-keyword">struct</span> {</code>
+<code>    value_set: AutoHashMapUnmanaged(Value, <span class="hl-type">void</span>),</code>
+<code>    value_count: <span class="hl-type">u32</span>,</code>
+<code>    tag: SegmentList(Tag),</code>
+<code>    index: SegmentList(<span class="hl-type">u32</span>),</code>
+<code></code>
+<code>    u64_count: <span class="hl-type">u32</span>,</code>
+<code>    <span class="hl-type">u64</span>: SegmentList(<span class="hl-type">u64</span>),</code>
+<code></code>
+<code>    aggregate_count: <span class="hl-type">u32</span>,</code>
+<code>    aggregate: SegmentList([]Value),</code>
+<code></code>
+<code>    bytes_count: <span class="hl-type">u32</span>,</code>
+<code>    bytes: SegmentList([]<span class="hl-type">u8</span>),</code>
+<code></code>
+<code>    <span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span><span class="hl-function"> intern</span>(self: <span class="hl-operator">*</span>Self, value_full: ValueFull) Value {</code>
+<code>        ...</code>
+<code>    }</code>
+<code>};</code></pre>
+
+</figure>
+<p>Pay attention to <code>_count</code> fields &mdash; we have <code>value_count</code> guarding the <code>tag</code> and <code>index</code>, and separate counts for specific kinds of values, as we don&rsquo;t want to allocate, e.g. an <code>u64</code> for <em>every</em> value.</p>
+<p>Our hashmap is actually a set which stores <code>u32</code> integers, but uses <code>ValueFull</code> to do a lookup: when we consider interning a new <code>ValueFull</code>, we don&rsquo;t know its index yet.
+Luckily, <code>getOrPutAdapted</code> API provides the required flexibility.
+We can use it to compare a <code>Value</code> (index) and a <code>ValueFull</code> by hashing a <code>ValueFull</code> and doing component-wise comparisons in the case of a collision.</p>
+<p>Note that, because of interning, we can also hash <code>ValueFull</code> efficiently!
+As any subvalues in <code>ValueFull</code> are guaranteed to be already interned, we can rely on shallow hash and hash only child value&rsquo;s indexes, rather than their data.</p>
+<p>This is a nice design for a single thread, but how do we make it thread safe?
+The straightforward solution would be to slap a mutex around the logic in <code>intern</code>.</p>
+<p>This actually is not as bad as it seems, as we&rsquo;d need a lock only in <code>intern</code>, and <code>lookup</code> would work without any synchronization whatsoever.
+Recall that obtaining an index of a value is a proof that the value was properly published.
+Still, we expect to intern a lot of values, and that mutex is all but guaranteed to become a point of contention.
+And some amount of contention is inevitable here &mdash; if two threads try to intern two identical values, we <em>want</em> them to clash, communicate, and end up with a single, shared value.</p>
+<p>There&rsquo;s a rather universal recipe for dealing with contention &mdash; you can shard the data.
+In our case, rather than using something like</p>
+
+<figure class="code-block">
+
+
+<pre><code>mutex: Mutex,</code>
+<code>value_set: AutoHashMapUnmanaged(Value, <span class="hl-type">void</span>),</code></pre>
+
+</figure>
+<p>we can do</p>
+
+<figure class="code-block">
+
+
+<pre><code>mutex: [<span class="hl-numbers">16</span>]Mutex,</code>
+<code>value_set: [<span class="hl-numbers">16</span>]AutoHashMapUnmanaged(Value, <span class="hl-type">void</span>),</code></pre>
+
+</figure>
+<p>That is, we create not one, but sixteen hashmaps, and use, e.g., lower 4 bits of the hash to decide which mutex and hashmap to use.
+Depending on the structure of the hashmap, such locks could even be pushed as far as individual buckets.</p>
+<p>This doesn&rsquo;t solve all our contention problems &mdash; now that several threads can simultaneously intern values (as long as they are hashed into different shards) we have to make all <code>count</code> variables atomic.
+So we essentially moved the single global point of contention from a mutex to <code>value_count</code> field, which is incremented for every interned value.</p>
+<p>We can apply the sharding trick again, and shard all our <code>SegmentList</code>s.
+But that would mean that we have to dedicate some bits from <code>Value</code> index to the shard number, and to waste some extra space for non-perfectly balanced shards.</p>
+<p>There&rsquo;s a better way &mdash; we can amortize atomic increments by allowing each thread to bulk-allocate indexes.
+That is, if a thread wants to allocate a new value, it atomically increments <code>value_cont</code> by, say, <code>1024</code>, and uses those indexes for the next thousand allocations.
+In addition to <code>ValueTable</code>, each thread now gets its own distinct <code>LocalTable</code>:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">const</span> LocalTable = <span class="hl-keyword">struct</span> {</code>
+<code>    global: <span class="hl-operator">*</span>ValueTable,</code>
+<code></code>
+<code>    <span class="hl-comment">// Invariant: if any `index % 1024 == 0`,</span></code>
+<code>    <span class="hl-comment">// it&#x27;s time to visit `global` to</span></code>
+<code>    <span class="hl-comment">// refill our budget via atomic fetchAndAdd.</span></code>
+<code>    value_index: <span class="hl-type">u32</span>,</code>
+<code>    u64_index: <span class="hl-type">u32</span>,</code>
+<code>    aggregate_index: <span class="hl-type">u32</span>,</code>
+<code>    bytes_index: <span class="hl-type">u32</span>,</code>
+<code>};</code></pre>
+
+</figure>
+<p>An attentive reader would notice a bonus here: in this setup, a thread allocates a contiguous chunk of values.
+It is reasonable to assume that values allocated together would also be used together, so we potentially increase future spatial locality here.</p>
+<p>Putting everything together, the pseudo-code for interning would look like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span><span class="hl-function"> intern</span>(table: <span class="hl-operator">*</span>LocalTable, value_full: ValueFull) Value {</code>
+<code>    <span class="hl-keyword">const</span> hash = shallow_hash(value_full);</code>
+<code></code>
+<code>    <span class="hl-comment">// Find &amp; lock the shard.</span></code>
+<code>    <span class="hl-keyword">const</span> shard = hash <span class="hl-operator">&amp;</span> <span class="hl-numbers">0xF</span>;</code>
+<code>    let mutex = <span class="hl-operator">&amp;</span>table.global.mutex[shard];</code>
+<code>    let value_set = <span class="hl-operator">&amp;</span>table.global.value_set[shard]</code>
+<code></code>
+<code>    mutex.lock();</code>
+<code>    <span class="hl-keyword">defer</span> mutex.unlock();</code>
+<code></code>
+<code>    <span class="hl-comment">// Either find that this value has been interned already...</span></code>
+<code>    <span class="hl-keyword">const</span> gop = value_set.get_or_put(hash, value_full, ...);</code>
+<code>    <span class="hl-keyword">if</span> (gop.found_existing) <span class="hl-keyword">return</span> got.key_ptr.<span class="hl-operator">*</span>;</code>
+<code></code>
+<code>    <span class="hl-comment">// ... or proceed to allocate a new index for it</span></code>
+<code></code>
+<code>    <span class="hl-keyword">if</span> (table.tag_index <span class="hl-operator">&amp;</span> <span class="hl-numbers">0xFF</span> <span class="hl-operator">==</span> <span class="hl-numbers">0</span>) {</code>
+<code>        <span class="hl-comment">// Run out of indexes, refill our budget!</span></code>
+<code>        table.tag_index = <span class="hl-built_in">@atomicRmw</span>(</code>
+<code>            <span class="hl-type">u32</span>, <span class="hl-operator">&amp;</span>table.global.value_count,</code>
+<code>            .Add, <span class="hl-numbers">0xFF</span>,</code>
+<code>            .Relaxed,</code>
+<code>        );</code>
+<code>    }</code>
+<code></code>
+<code>    <span class="hl-comment">// Assign the index to the new value</span></code>
+<code>    <span class="hl-comment">// and put it into the hash map.</span></code>
+<code>    <span class="hl-keyword">const</span> value = table.tag_index;</code>
+<code>    table.tag_index <span class="hl-operator">+=</span> <span class="hl-numbers">1</span>;</code>
+<code>    gop.key_ptr.<span class="hl-operator">*</span> = value;</code>
+<code></code>
+<code>    <span class="hl-comment">// Now initialize the value.</span></code>
+<code>    <span class="hl-comment">// Note that we still hold shard&#x27;s mutex at this point.</span></code>
+<code></code>
+<code>    <span class="hl-keyword">switch</span> (value_full) {</code>
+<code>        .aggregate =&gt; <span class="hl-operator">|</span>fields<span class="hl-operator">|</span> {</code>
+<code>            <span class="hl-comment">// Initialize the tag, common for all values.</span></code>
+<code>            table.global.tag.set(value, .aggregate);</code>
+<code></code>
+<code>            <span class="hl-comment">// Allocate tag-specific data using</span></code>
+<code>            <span class="hl-comment">// the same atomic add trick.</span></code>
+<code>            <span class="hl-keyword">if</span> (table.aggregate_index <span class="hl-operator">&amp;</span> <span class="hl-numbers">0xFF</span> <span class="hl-operator">==</span> <span class="hl-numbers">0</span>) {</code>
+<code>                table.aggregate_index = <span class="hl-built_in">@atomicRmw</span>(</code>
+<code>                    <span class="hl-type">u32</span>, <span class="hl-operator">&amp;</span>table.global.aggregate_count,</code>
+<code>                    .Add, <span class="hl-numbers">0xFF</span>,</code>
+<code>                    .Relaxed,</code>
+<code>                );</code>
+<code>            }</code>
+<code>            <span class="hl-keyword">const</span> index = table.aggregate_index;</code>
+<code>            table.aggregate_index <span class="hl-operator">+=</span> <span class="hl-numbers">1</span>;</code>
+<code></code>
+<code>            <span class="hl-comment">// Make it possible to find tag-specific data</span></code>
+<code>            <span class="hl-comment">// from the value index.</span></code>
+<code>            table.global.index.set(value, index);</code>
+<code></code>
+<code>            <span class="hl-comment">// `value_full` is borrowed, so we must</span></code>
+<code>            <span class="hl-comment">// create a copy that we own.</span></code>
+<code>            <span class="hl-keyword">const</span> fields_owned = allocator.dup(fields)</code>
+<code>                <span class="hl-keyword">catch</span> <span class="hl-keyword">unreachable</span>;</code>
+<code></code>
+<code>            table.global.aggregate.set(index, fields_owned);</code>
+<code>        }</code>
+<code>    }</code>
+<code></code>
+<code>    <span class="hl-keyword">return</span> value;</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-comment">// Code for assigning an index of a SegmentList.</span></code>
+<code><span class="hl-comment">// Shard&#x27;s mutex guarantees exclusive access to the index.</span></code>
+<code><span class="hl-comment">// Accesses to the echelon might race though.</span></code>
+<code><span class="hl-keyword">fn</span><span class="hl-function"> set</span>(list: SegmentList(T), index: <span class="hl-type">u32</span>, value: T) {</code>
+<code>    <span class="hl-keyword">const</span> e = list.get_echelon(index);</code>
+<code>    <span class="hl-keyword">const</span> i = index <span class="hl-operator">-</span> ((<span class="hl-numbers">1</span> <span class="hl-operator">&lt;&lt;</span> e) <span class="hl-operator">-</span> <span class="hl-numbers">1</span>);</code>
+<code></code>
+<code>    <span class="hl-keyword">var</span> echelon = <span class="hl-built_in">@atomicLoad</span>(?[<span class="hl-operator">*</span>]T, <span class="hl-operator">&amp;</span>list.echelons[e], .Acquire);</code>
+<code>    <span class="hl-keyword">if</span> (echelon <span class="hl-operator">==</span> <span class="hl-literal">null</span>) {</code>
+<code>        <span class="hl-comment">// Race with other threads to allocate the echelon.</span></code>
+<code>        <span class="hl-keyword">const</span> echelon_new = allocator.alloc(T, <span class="hl-numbers">1</span> <span class="hl-operator">&lt;&lt;</span> e)</code>
+<code>            <span class="hl-keyword">catch</span> <span class="hl-keyword">unreachable</span>;</code>
+<code></code>
+<code>        <span class="hl-keyword">const</span> modified = <span class="hl-built_in">@cmpxchgStrong</span>(</code>
+<code>            ?[<span class="hl-operator">*</span>]T, <span class="hl-operator">&amp;</span>list.echelons[e],</code>
+<code>            <span class="hl-literal">null</span>, echelon_new,</code>
+<code>            .Release, .Acquire,</code>
+<code>        );</code>
+<code></code>
+<code>        <span class="hl-keyword">if</span> (modified) <span class="hl-operator">|</span>echelon_modified<span class="hl-operator">|</span> {</code>
+<code>            <span class="hl-comment">// Another thread won, free our useless allocation.</span></code>
+<code>            echelon = echelon_modified</code>
+<code>            allocator.free(echelon_new);</code>
+<code>        } <span class="hl-keyword">else</span> {</code>
+<code>            echelon = echelon_new;</code>
+<code>        }</code>
+<code>    }</code>
+<code></code>
+<code>    echelon.?[i] = value;</code>
+<code>}</code></pre>
+
+</figure>
+<p>Note that it is important that we <em>don&rsquo;t</em> release the mutex immediately after assigning the index for a value, but rather keep it locked all the way until we fully copied thee value into the <code>ValueTable</code>.
+If we release the lock earlier, a different thread which tries to intern the same value would get the correct index, but would risk accessing partially-initialized data.
+This can be optimized a bit by adding value-specific lock (or rather, a <a href="https://github.com/ziglang/zig/blob/b95cdf0aeb4d4d31c0b6a54302ef61baec8f6773/lib/std/once.zig"><code>Once</code></a>).
+So we use the shard lock to assign an index, then release the shard lock, and use value-specific lock to do the actual (potentially slow) initialization.</p>
+<p>And that&rsquo;s all I have for today!
+Again, I haven&rsquo;t implemented this, so I have no idea how fast or slow it actually is.
+But the end result looks rather beautiful, and builds upon many interesting ideas:</p>
+<ul>
+<li>
+<p><code>SegmentList</code> allows to maintain index stability despite insertions.</p>
+</li>
+<li>
+<p>There will be at most 31 echelons in a <code>SegmentList</code>, so you can put pointes to them into an array, removing the need to synchronize to read an echelon.</p>
+</li>
+<li>
+<p>With this setup, it becomes easy to initialize a new echelon with a single CAS.</p>
+</li>
+<li>
+<p>Synchronization is required only when creating a new item.
+If you trust indexes, you can use them to carry happens-before.</p>
+</li>
+<li>
+<p>In a struct-of-arrays setup for enums, you can save space by requiring that an array for a specific variant is just as long as it needs to be.</p>
+</li>
+<li>
+<p>One benefit of interning trees is that hash function becomes a shallow operation.</p>
+</li>
+<li>
+<p>Optimal interners use hashmaps in a fancy way, where the key is not what you actually store in the hashmap.
+I have two related posts about that,
+<a href="https://matklad.github.io/2020/03/22/fast-simple-rust-interner.html">&ldquo;Fast and Simple Rust Interner&rdquo;</a> and
+<a href="https://matklad.github.io/2020/12/28/csdi.html">&ldquo;Call Site Dependency Injection&rdquo;</a>.</p>
+</li>
+<li>
+<p>Sharding is an effective way to reduce contention if you are dealing with something like a shared hashmap.</p>
+</li>
+<li>
+<p>For counters, one alternative to sharding is batching up the increments.</p>
+</li>
+</ul>
+<p>Discussion on <a href="https://old.reddit.com/r/Zig/">/r/Zig</a>.</p>
+</article>
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <a href="https://github.com/matklad/matklad.github.io/edit/master/src/posts/2023-04-23-data-oriented-parallel-value-interner.dj">
+        <i class="fa fa-edit"></i> fix typo
+      </a>
+
+      <a href="/feed.xml">
+        <i class="fa fa-rss"></i> rss
+      </a>
+
+      <a href="https://github.com/matklad">
+        <i class="fa fa-github"></i> matklad
+      </a>
+    </p>
+  </footer>
+</body>
+
+</html>

@@ -1,0 +1,154 @@
+
+<!DOCTYPE html>
+<html lang='en-US'>
+<head>
+  <meta charset='utf-8'>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rust Is a Scalable Language</title>
+  <meta name="description" content="In my last post about Zig and Rust, I mentioned that Rust is a scalable language.
+Let me expand on this a bit.">
+  <link rel="icon" href="/favicon.png" type="image/png">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="canonical" href="https://matklad.github.io/2023/03/28/rust-is-a-scalable-language.html">
+  <link rel="alternate" type="application/rss+xml" title="matklad" href="https://matklad.github.io/feed.xml">
+  <style>
+  @font-face {
+    font-family: 'Open Sans'; src: url('/css/OpenSans-300-Normal.woff2') format('woff2');
+    font-weight: 300; font-style: normal;
+  }
+  @font-face {
+    font-family: 'JetBrains Mono'; src: url('/css/JetBrainsMono-400-Normal.woff2') format('woff2');
+    font-weight: 400; font-style: normal;
+  }
+  @font-face {
+    font-family: 'JetBrains Mono'; src: url('/css/JetBrainsMono-700-Normal.woff2') format('woff2');
+    font-weight: 700; font-style: normal;
+  }
+  @font-face {
+    font-family: 'EB Garamond'; src: url('/css/EBGaramond-400-Normal.woff2') format('woff2');
+    font-weight: 400; font-style: normal;
+  }
+  @font-face {
+    font-family: 'EB Garamond'; src: url('/css/EBGaramond-400-Italic.woff2') format('woff2');
+    font-weight: 400; font-style: italic;
+  }
+  @font-face {
+    font-family: 'EB Garamond'; src: url('/css/EBGaramond-700-Normal.woff2') format('woff2');
+    font-weight: 700; font-style: normal;
+  }
+  @font-face {
+    font-family: 'EB Garamond'; src: url('/css/EBGaramond-700-Italic.woff2') format('woff2');
+    font-weight: 700; font-style: italic;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; margin-block-start: 0; margin-block-end: 0; }
+
+  body {
+    max-width: 80ch;
+    padding: 2ch;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  header { margin-bottom: 2rem; }
+  header > nav { display: flex; column-gap: 2ch; align-items: baseline; flex-wrap: wrap; }
+  header a { font-style: normal; color: rgba(0, 0, 0, .8); text-decoration: none; }
+  header a:hover { color: rgba(0, 0, 0, .8); text-decoration: underline; }
+  header .title { font-size: 1.25em; flex-grow: 2; }
+
+  footer { margin-top: 2rem; }
+  footer > p { display: flex; column-gap: 2ch; justify-content: center; flex-wrap: wrap; }
+  footer a { color: rgba(0, 0, 0, .8); text-decoration: none; white-space: nowrap; }
+  footer i { vertical-align: middle; color: rgba(0, 0, 0, .8) }
+
+  </style>
+
+  <link rel="stylesheet" href="/css/main.css">
+  
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.4.0/css/font-awesome.min.css">
+</head>
+
+<body>
+  <header>
+    <nav>
+      <a class="title" href="/">matklad</a>
+      <a href="/about.html">About</a>
+      <a href="/resume.html">Resume</a>
+      <a href="/links.html">Links</a>
+    </nav>
+  </header>
+
+  <main>
+  <article >
+
+    <h1>
+    <a href="#Rust-Is-a-Scalable-Language">Rust Is a Scalable Language <time datetime="2023-03-28">Mar 28, 2023</time></a>
+    </h1>
+<p>In my last post about <a href="https://matklad.github.io/2023/03/26/zig-and-rust.html"><em>Zig and Rust</em></a>, I mentioned that Rust is a &ldquo;scalable language&rdquo;.
+Let me expand on this a bit.</p>
+<section id="Vertical-Scalability">
+
+    <h2>
+    <a href="#Vertical-Scalability">Vertical Scalability </a>
+    </h2>
+<p>Rust is vertically scalable, in that you can write all kinds of software in it.
+You can write an advanced zero-alloc image compression library, build a web server exposing the library to the world as an HTTP SAAS, and cobble together a &ldquo;script&rdquo; for building, testing, and deploying it to wherever people deploy software these days.
+And you would only need Rust &mdash; while it excels in the lowest half of the stack, it&rsquo;s pretty ok everywhere else too.</p>
+</section>
+<section id="Horizontal-Scalability">
+
+    <h2>
+    <a href="#Horizontal-Scalability">Horizontal Scalability </a>
+    </h2>
+<p>Rust is horizontally scalable, in that you can easily parallelize development of large software artifacts across many people and teams.
+Rust itself moves with a breakneck speed, which is surprising for such a loosely coordinated and chronically understaffed open source project of this scale.
+The relatively small community  managed to put together a comprehensive ecosystem of composable high-quality crates on a short notice.
+Rust is so easy to compose reliably that even the stdlib itself does not shy from pulling dependencies from crates.io.</p>
+<p>Steve Klabnik wrote about <a href="https://steveklabnik.com/writing/rusts-golden-rule"><em>Rust&rsquo;s Golden Rule</em></a>,
+how function signatures are mandatory and authoritative and explicitly define the interface both for the callers of the function and for the function&rsquo;s body.
+This thinking extends to other parts of the language.</p>
+<p>My second most favorite feature of Rust (after safety) is its module system.
+It has first-class support for the concept of a library.
+A library is called a crate and is a tree of modules, a unit of compilation, and a principle visibility boundary.
+Modules can contain circular dependencies, but libraries always form a directed acyclic graph.
+There&rsquo;s no global namespace of symbols &mdash; libraries are anonymous, names only appear on dependency edges between two libraries, and are local to the downstream crate.</p>
+<p>The benefits of this core compilation model are then greatly amplified by Cargo, which is not a generalized task runner, but rather a rigid specification for what is a package of Rust code:</p>
+<ul>
+<li>
+a (library) crate,
+</li>
+<li>
+a manifest, which defines dependencies between packages in a declarative way, using semver,
+</li>
+<li>
+an ecosystem-wide agreement on the semantics of dependency specification, and accompanied dependency resolution algorithm.
+</li>
+</ul>
+<p>Crucially, there&rsquo;s absolutely no way in Cargo to control the actual build process.
+The <code>build.rs</code> file can be used to provide extra runtime inputs, but it&rsquo;s <code>cargo</code> who calls <code>rustc</code>.</p>
+<p>Again, Cargo defines a rigid interface for a reusable piece of Rust code.
+Both producers and consumers must abide by these rules, there is no way around them.
+As a reward, they get a super-power of working together by working apart.
+I don&rsquo;t need to ping dtolnay in Slack when I want to use serde-json because we implicitly pre-agreed to a shared golden rule.</p>
+</section>
+</article>
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <a href="https://github.com/matklad/matklad.github.io/edit/master/src/posts/2023-03-28-rust-is-a-scalable-language.dj">
+        <i class="fa fa-edit"></i> fix typo
+      </a>
+
+      <a href="/feed.xml">
+        <i class="fa fa-rss"></i> rss
+      </a>
+
+      <a href="https://github.com/matklad">
+        <i class="fa fa-github"></i> matklad
+      </a>
+    </p>
+  </footer>
+</body>
+
+</html>

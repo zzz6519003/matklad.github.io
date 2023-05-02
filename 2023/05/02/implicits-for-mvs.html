@@ -1,0 +1,286 @@
+
+<!DOCTYPE html>
+<html lang='en-US'>
+<head>
+  <meta charset='utf-8'>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Value Oriented Programming Needs Implicits?</title>
+  <meta name="description" content="An amateur note on language design which explores two important questions:">
+  <link rel="icon" href="/favicon.png" type="image/png">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="canonical" href="https://matklad.github.io/2023/05/02/implicits-for-mvs.html">
+  <link rel="alternate" type="application/rss+xml" title="matklad" href="https://matklad.github.io/feed.xml">
+  <style>
+  @font-face {
+    font-family: 'Open Sans'; src: url('/css/OpenSans-300-Normal.woff2') format('woff2');
+    font-weight: 300; font-style: normal;
+  }
+  @font-face {
+    font-family: 'JetBrains Mono'; src: url('/css/JetBrainsMono-400-Normal.woff2') format('woff2');
+    font-weight: 400; font-style: normal;
+  }
+  @font-face {
+    font-family: 'JetBrains Mono'; src: url('/css/JetBrainsMono-700-Normal.woff2') format('woff2');
+    font-weight: 700; font-style: normal;
+  }
+  @font-face {
+    font-family: 'EB Garamond'; src: url('/css/EBGaramond-400-Normal.woff2') format('woff2');
+    font-weight: 400; font-style: normal;
+  }
+  @font-face {
+    font-family: 'EB Garamond'; src: url('/css/EBGaramond-400-Italic.woff2') format('woff2');
+    font-weight: 400; font-style: italic;
+  }
+  @font-face {
+    font-family: 'EB Garamond'; src: url('/css/EBGaramond-700-Normal.woff2') format('woff2');
+    font-weight: 700; font-style: normal;
+  }
+  @font-face {
+    font-family: 'EB Garamond'; src: url('/css/EBGaramond-700-Italic.woff2') format('woff2');
+    font-weight: 700; font-style: italic;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; margin-block-start: 0; margin-block-end: 0; }
+
+  body {
+    max-width: 80ch;
+    padding: 2ch;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  header { margin-bottom: 2rem; }
+  header > nav { display: flex; column-gap: 2ch; align-items: baseline; flex-wrap: wrap; }
+  header a { font-style: normal; color: rgba(0, 0, 0, .8); text-decoration: none; }
+  header a:hover { color: rgba(0, 0, 0, .8); text-decoration: underline; }
+  header .title { font-size: 1.25em; flex-grow: 2; }
+
+  footer { margin-top: 2rem; }
+  footer > p { display: flex; column-gap: 2ch; justify-content: center; flex-wrap: wrap; }
+  footer a { color: rgba(0, 0, 0, .8); text-decoration: none; white-space: nowrap; }
+  footer i { vertical-align: middle; color: rgba(0, 0, 0, .8) }
+
+  </style>
+
+  <link rel="stylesheet" href="/css/main.css">
+  
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.4.0/css/font-awesome.min.css">
+</head>
+
+<body>
+  <header>
+    <nav>
+      <a class="title" href="/">matklad</a>
+      <a href="/about.html">About</a>
+      <a href="/resume.html">Resume</a>
+      <a href="/links.html">Links</a>
+    </nav>
+  </header>
+
+  <main>
+  <article >
+
+    <h1>
+    <a href="#Value-Oriented-Programming-Needs-Implicits">Value Oriented Programming Needs Implicits? <time datetime="2023-05-02">May 2, 2023</time></a>
+    </h1>
+<p>An amateur note on language design which explores two important questions:</p>
+<ul>
+<li>
+How to do polymorphism?
+</li>
+<li>
+How to do anything at all?
+</li>
+</ul>
+<p>Let&rsquo;s start with the second question.
+What is the basic stuff that everything else is made of?</p>
+<p>Not so long ago, the most popular answer to that question was &ldquo;objects&rdquo; &mdash; blobs of mutable state with references to other blobs.
+This turned out to be problematic &mdash; local mutation of an object might accidentally cause unwanted changes elsewhere.
+Defensive copying of collections at the API boundary was a common pattern.</p>
+<p>Another answer to the question of basic stuff  is &ldquo;immutable values&rdquo;, as exemplified by functional programming.
+This fixes the ability to reason about programs locally at the cost of developer ergonomics and expressiveness.
+A lot of code is naturally formulated in terms of &ldquo;let&rsquo;s mutate this little thing&rdquo;, and functionally threading the update through all the layers is tiresome.</p>
+<p>The C answer is that everything is made of &ldquo;memory (*)&rdquo;.
+It is almost as if memory is an array of bytes.
+Almost, but not quite &mdash; to write portable programs amenable to optimization, certain restrictions must be placed on the ways memory is accessed and manipulated, hence (*).
+These restrictions not being checked by the compiler (and not even visible in the source code) create a fertile ground for subtle bugs.</p>
+<p>Rust takes this basic C model and:</p>
+<ul>
+<li>
+Makes the (*) explicit:
+<ul>
+<li>
+pointers always carry the size of addressed memory, possibly at runtime (slices),
+</li>
+<li>
+pointers carry lifetime, accessing the data past the end of the lifetime is forbidden.
+</li>
+</ul>
+</li>
+<li>
+Adds aliasing information to the type system, such that it becomes possible to tell if there are <em>other</em> pointers pointing at a particular piece of memory.
+</li>
+</ul>
+<p>Curiously, this approach allows rust to have an &ldquo;immutable values&rdquo; feel, without requiring the user to thread updates manually,
+<a href="http://smallcultfollowing.com/babysteps/blog/2018/02/01/in-rust-ordinary-vectors-are-values/">&ldquo;In Rust, Ordinary Vectors are Values&rdquo;</a>.
+But the cognitive cost for this approach is pretty high, as the universe of values is now forked by different flavors of owning/referencing.</p>
+<p>Let&rsquo;s go back to the pure FP model.
+Can we just locally fix it?
+Let&rsquo;s take a look at an example:</p>
+
+<figure class="code-block">
+
+
+<pre><code>let xs1 = get_items() in</code>
+<code>let xs2  = modify_items(xs1) in</code>
+<code>let xs3 = sort_items(xs2) in</code>
+<code>...</code></pre>
+
+</figure>
+<p>It is pretty clear that we can allow mutation of local variables via a simple rewrite, as that won&rsquo;t compromise local reasoning:</p>
+
+<figure class="code-block">
+
+
+<pre><code>var xs = get_items()</code>
+<code>xs = modify_items(xs)</code>
+<code>xs = sort_items(xs)</code></pre>
+
+</figure>
+<p>Similarly, we can introduce a rewrite rule for the ubiquitous <code>x = f(x)</code> pattern, such that the code looks like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code>var xs = get_items()</code>
+<code>modify_items(xs)</code>
+<code>sort_items(xs)</code></pre>
+
+</figure>
+<p>Does this actually work?
+Yes, it does, as popularized by Swift and distilled in its pure form by <a href="https://www.val-lang.dev">Val</a>.</p>
+<p>Formalizing the rewriting reasoning, we introduce second-class references, which can <em>only</em> appear in function arguments (<code>inout</code> parameters), but, eg, can&rsquo;t be stored as fields.
+With these restrictions, &ldquo;borrow checking&rdquo; becomes fairly simple &mdash; at each function call it suffices to check that no two <code>inout</code> arguments overlap.</p>
+<p>Now, let&rsquo;s switch gears and explore the second question &mdash; polymorphism.</p>
+<p>Starting again with OOP, you can use subtyping with its familiar <span class="display"><code>class Dog extends Triangle</code>,</span> but that is not very flexible.
+In particular, expressing something like &ldquo;sorting a list of items&rdquo; with pure subtyping is not too natural.
+What works better is parametric polymorphism, where you add type parameters to your data structures:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span> <span class="hl-title function_">sort</span>&lt;T&gt;(items: &amp;<span class="hl-keyword">mut</span> <span class="hl-type">Vec</span>&lt;T&gt;)</code></pre>
+
+</figure>
+<p>Except that it doesn&rsquo;t quite work as, as we also need to specify how to sort the <code>T</code>s.
+One approach here would be to introduce some sort of type-of-types, to group types with similar traits into a class:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span> <span class="hl-title function_">sort</span>&lt;T: Comparable&gt;(items: &amp;<span class="hl-keyword">mut</span> <span class="hl-type">Vec</span>&lt;T&gt;)</code></pre>
+
+</figure>
+<p>A somewhat simpler approach is to just explicitly pass in a comparison function:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span> <span class="hl-title function_">sort</span>&lt;T&gt;(</code>
+<code>    compare: <span class="hl-title function_ invoke__">fn</span>(T, T) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">bool</span>,</code>
+<code>    items: &amp;<span class="hl-keyword">mut</span> <span class="hl-type">Vec</span>&lt;T&gt;,</code>
+<code>)</code></pre>
+
+</figure>
+<p>How does this relate to value oriented programming?
+It happens that, when programming with values, a very common pattern is to use indexes to express relationships.
+For example, to model parent-child relations (or arbitrary graphs), the following setup works:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">type</span> <span class="hl-title class_">Tree</span> = <span class="hl-type">Vec</span>&lt;Node&gt;;</code>
+<code><span class="hl-keyword">struct</span> <span class="hl-title class_">Node</span> {</code>
+<code>    parent: <span class="hl-type">usize</span>,</code>
+<code>    children: <span class="hl-type">Vec</span>&lt;<span class="hl-type">usize</span>&gt;,</code>
+<code>}</code></pre>
+
+</figure>
+<p>Using direct references hits language limitations:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">struct</span> <span class="hl-title class_">Node</span> {</code>
+<code>    parent: Node, <span class="hl-comment">// Who owns that?</span></code>
+<code>    children: <span class="hl-type">Vec</span>&lt;Node&gt;,</code>
+<code>}</code></pre>
+
+</figure>
+<p>Another good use-case is interning, where you have something like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">struct</span> <span class="hl-title class_">NameTable</span> {</code>
+<code>    strings: <span class="hl-type">Vec</span>&lt;<span class="hl-type">String</span>&gt;,</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">struct</span> <span class="hl-title class_">Name</span>(<span class="hl-type">u32</span>);</code></pre>
+
+</figure>
+<p>How do we sort a <code>Vec&lt;Name&gt;</code>?
+We can&rsquo;t use the type class approach here, as knowing the <em>type</em> of <code>Name</code> isn&rsquo;t enough to sort names lexicographically, an instance of <code>NameTable</code> is also required to fetch the actual string data.
+The approach with just passing in comparison function works, as it can close over the correct <code>NameTable</code> in scope.</p>
+<p>The problem with &ldquo;just pass a function&rdquo; is that it gets tedious quickly.
+Rather than <span class="display"><code>xs.print()</code></span> you now need to say <span class="display"><code>xs.print(Int::print)</code>.</span>
+Luckily, similarly to how the compiler infers the type parameter <code>T</code> by default, we can allow limited inference of value parameters, which should remove most of the boilerplate.
+So, something which looks like <span class="display"><code>names.print()</code></span> would desugar to <span class="display"><code>Vec::print_vec(self.name_table.print, names)</code>.</span></p>
+<p>This could also synergize well with compile-time evaluation.
+If (as is the common case), the value of the implicit function table is known at compile time, no table needs to be passed in at runtime (and we don&rsquo;t have to repeatedly evaluate the table itself).
+We can even compile-time partially evaluate things within the compilation unit, and use runtime parameters at the module boundaries, just like Swift does.</p>
+<p>And that&rsquo;s basically it!
+TL;DR: value oriented programming / mutable value semantics is an interesting &ldquo;everything is X&rdquo; approach to get the benefits of functional purity without giving up on mutable hash tables.
+This style of programming doesn&rsquo;t work with cyclic data structures (values are always trees), so indexes are often used to express auxiliary relations.
+This, however, gets in a way of type-based generic programming &mdash; a <code>T</code> is no longer <code>Comparable</code>, only <code>T + Context</code> is.
+A potential fix for that is to base generic programming on explicit dictionary passing combined with implicit value parameter inference.</p>
+<p>Is there a language like this already?</p>
+<p>Links:</p>
+<ul>
+<li>
+<a href="https://www.val-lang.dev">Val</a>
+</li>
+<li>
+<a href="https://arxiv.org/pdf/1512.01895.pdf">Modular implicits</a>
+</li>
+<li>
+<a href="https://rust-lang.github.io/async-fundamentals-initiative/evaluation/design/with_clauses.html">With clauses</a>
+</li>
+<li>
+<a href="https://www.youtube.com/watch?v=ctS8FzqcRug">Implementing Swift generics</a>
+</li>
+</ul>
+<style>
+.display { display: block; margin: 1em 0; text-align: center }
+</style>
+</article>
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <a href="https://github.com/matklad/matklad.github.io/edit/master/src/posts/2023-05-02-implicits-for-mvs.dj">
+        <i class="fa fa-edit"></i> fix typo
+      </a>
+
+      <a href="/feed.xml">
+        <i class="fa fa-rss"></i> rss
+      </a>
+
+      <a href="https://github.com/matklad">
+        <i class="fa fa-github"></i> matklad
+      </a>
+    </p>
+  </footer>
+</body>
+
+</html>

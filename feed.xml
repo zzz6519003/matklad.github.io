@@ -1,0 +1,2057 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+<link href="https://matklad.github.io/feed.xml" rel="self" type="application/atom+xml"/>
+<link href="https://matklad.github.io" rel="alternate" type="text/html"/>
+<updated>2023-05-02T23:12:11.112Z</updated>
+<id>https://matklad.github.io/feed.xml</id>
+<title type="html">matklad</title>
+<subtitle>Yet another programming blog by Alex Kladov aka matklad.</subtitle>
+<author><name>Alex Kladov</name></author>
+
+<entry>
+<title type="text">Value Oriented Programming Needs Implicits?</title>
+<link href="https://matklad.github.io/2023/05/02/implicits-for-mvs.html" rel="alternate" type="text/html" title="Value Oriented Programming Needs Implicits?" />
+<published>2023-05-02T00:00:00+00:00</published>
+<updated>2023-05-02T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2023/05/02/implicits-for-mvs</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[An amateur note on language design which explores two important questions:]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2023/05/02/implicits-for-mvs.html"><![CDATA[
+    <h1>
+    <a href="#Value-Oriented-Programming-Needs-Implicits">Value Oriented Programming Needs Implicits? <time datetime="2023-05-02">May 2, 2023</time></a>
+    </h1>
+<p>An amateur note on language design which explores two important questions:</p>
+<ul>
+<li>
+How to do polymorphism?
+</li>
+<li>
+How to do anything at all?
+</li>
+</ul>
+<p>Let&rsquo;s start with the second question.
+What is the basic stuff that everything else is made of?</p>
+<p>Not so long ago, the most popular answer to that question was &ldquo;objects&rdquo; &mdash; blobs of mutable state with references to other blobs.
+This turned out to be problematic &mdash; local mutation of an object might accidentally cause unwanted changes elsewhere.
+Defensive copying of collections at the API boundary was a common pattern.</p>
+<p>Another answer to the question of basic stuff  is &ldquo;immutable values&rdquo;, as exemplified by functional programming.
+This fixes the ability to reason about programs locally at the cost of developer ergonomics and expressiveness.
+A lot of code is naturally formulated in terms of &ldquo;let&rsquo;s mutate this little thing&rdquo;, and functionally threading the update through all the layers is tiresome.</p>
+<p>The C answer is that everything is made of &ldquo;memory (*)&rdquo;.
+It is almost as if memory is an array of bytes.
+Almost, but not quite &mdash; to write portable programs amenable to optimization, certain restrictions must be placed on the ways memory is accessed and manipulated, hence (*).
+These restrictions not being checked by the compiler (and not even visible in the source code) create a fertile ground for subtle bugs.</p>
+<p>Rust takes this basic C model and:</p>
+<ul>
+<li>
+Makes the (*) explicit:
+<ul>
+<li>
+pointers always carry the size of addressed memory, possibly at runtime (slices),
+</li>
+<li>
+pointers carry lifetime, accessing the data past the end of the lifetime is forbidden.
+</li>
+</ul>
+</li>
+<li>
+Adds aliasing information to the type system, such that it becomes possible to tell if there are <em>other</em> pointers pointing at a particular piece of memory.
+</li>
+</ul>
+<p>Curiously, this approach allows rust to have an &ldquo;immutable values&rdquo; feel, without requiring the user to thread updates manually,
+<a href="http://smallcultfollowing.com/babysteps/blog/2018/02/01/in-rust-ordinary-vectors-are-values/">&ldquo;In Rust, Ordinary Vectors are Values&rdquo;</a>.
+But the cognitive cost for this approach is pretty high, as the universe of values is now forked by different flavors of owning/referencing.</p>
+<p>Let&rsquo;s go back to the pure FP model.
+Can we just locally fix it?
+Let&rsquo;s take a look at an example:</p>
+
+<figure class="code-block">
+
+
+<pre><code>let xs1 = get_items() in</code>
+<code>let xs2  = modify_items(xs1) in</code>
+<code>let xs3 = sort_items(xs2) in</code>
+<code>...</code></pre>
+
+</figure>
+<p>It is pretty clear that we can allow mutation of local variables via a simple rewrite, as that won&rsquo;t compromise local reasoning:</p>
+
+<figure class="code-block">
+
+
+<pre><code>var xs = get_items()</code>
+<code>xs = modify_items(xs)</code>
+<code>xs = sort_items(xs)</code></pre>
+
+</figure>
+<p>Similarly, we can introduce a rewrite rule for the ubiquitous <code>x = f(x)</code> pattern, such that the code looks like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code>var xs = get_items()</code>
+<code>modify_items(xs)</code>
+<code>sort_items(xs)</code></pre>
+
+</figure>
+<p>Does this actually work?
+Yes, it does, as popularized by Swift and distilled in its pure form by <a href="https://www.val-lang.dev">Val</a>.</p>
+<p>Formalizing the rewriting reasoning, we introduce second-class references, which can <em>only</em> appear in function arguments (<code>inout</code> parameters), but, eg, can&rsquo;t be stored as fields.
+With these restrictions, &ldquo;borrow checking&rdquo; becomes fairly simple &mdash; at each function call it suffices to check that no two <code>inout</code> arguments overlap.</p>
+<p>Now, let&rsquo;s switch gears and explore the second question &mdash; polymorphism.</p>
+<p>Starting again with OOP, you can use subtyping with its familiar <span class="display"><code>class Dog extends Triangle</code>,</span> but that is not very flexible.
+In particular, expressing something like &ldquo;sorting a list of items&rdquo; with pure subtyping is not too natural.
+What works better is parametric polymorphism, where you add type parameters to your data structures:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span> <span class="hl-title function_">sort</span>&lt;T&gt;(items: &amp;<span class="hl-keyword">mut</span> <span class="hl-type">Vec</span>&lt;T&gt;)</code></pre>
+
+</figure>
+<p>Except that it doesn&rsquo;t quite work as, as we also need to specify how to sort the <code>T</code>s.
+One approach here would be to introduce some sort of type-of-types, to group types with similar traits into a class:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span> <span class="hl-title function_">sort</span>&lt;T: Comparable&gt;(items: &amp;<span class="hl-keyword">mut</span> <span class="hl-type">Vec</span>&lt;T&gt;)</code></pre>
+
+</figure>
+<p>A somewhat simpler approach is to just explicitly pass in a comparison function:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span> <span class="hl-title function_">sort</span>&lt;T&gt;(</code>
+<code>    compare: <span class="hl-title function_ invoke__">fn</span>(T, T) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">bool</span>,</code>
+<code>    items: &amp;<span class="hl-keyword">mut</span> <span class="hl-type">Vec</span>&lt;T&gt;,</code>
+<code>)</code></pre>
+
+</figure>
+<p>How does this relate to value oriented programming?
+It happens that, when programming with values, a very common pattern is to use indexes to express relationships.
+For example, to model parent-child relations (or arbitrary graphs), the following setup works:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">type</span> <span class="hl-title class_">Tree</span> = <span class="hl-type">Vec</span>&lt;Node&gt;;</code>
+<code><span class="hl-keyword">struct</span> <span class="hl-title class_">Node</span> {</code>
+<code>    parent: <span class="hl-type">usize</span>,</code>
+<code>    children: <span class="hl-type">Vec</span>&lt;<span class="hl-type">usize</span>&gt;,</code>
+<code>}</code></pre>
+
+</figure>
+<p>Using direct references hits language limitations:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">struct</span> <span class="hl-title class_">Node</span> {</code>
+<code>    parent: Node, <span class="hl-comment">// Who owns that?</span></code>
+<code>    children: <span class="hl-type">Vec</span>&lt;Node&gt;,</code>
+<code>}</code></pre>
+
+</figure>
+<p>Another good use-case is interning, where you have something like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">struct</span> <span class="hl-title class_">NameTable</span> {</code>
+<code>    strings: <span class="hl-type">Vec</span>&lt;<span class="hl-type">String</span>&gt;,</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">struct</span> <span class="hl-title class_">Name</span>(<span class="hl-type">u32</span>);</code></pre>
+
+</figure>
+<p>How do we sort a <code>Vec&lt;Name&gt;</code>?
+We can&rsquo;t use the type class approach here, as knowing the <em>type</em> of <code>Name</code> isn&rsquo;t enough to sort names lexicographically, an instance of <code>NameTable</code> is also required to fetch the actual string data.
+The approach with just passing in comparison function works, as it can close over the correct <code>NameTable</code> in scope.</p>
+<p>The problem with &ldquo;just pass a function&rdquo; is that it gets tedious quickly.
+Rather than <span class="display"><code>xs.print()</code></span> you now need to say <span class="display"><code>xs.print(Int::print)</code>.</span>
+Luckily, similarly to how the compiler infers the type parameter <code>T</code> by default, we can allow limited inference of value parameters, which should remove most of the boilerplate.
+So, something which looks like <span class="display"><code>names.print()</code></span> would desugar to <span class="display"><code>Vec::print_vec(self.name_table.print, names)</code>.</span></p>
+<p>This could also synergize well with compile-time evaluation.
+If (as is the common case), the value of the implicit function table is known at compile time, no table needs to be passed in at runtime (and we don&rsquo;t have to repeatedly evaluate the table itself).
+We can even compile-time partially evaluate things within the compilation unit, and use runtime parameters at the module boundaries, just like Swift does.</p>
+<p>And that&rsquo;s basically it!
+TL;DR: value oriented programming / mutable value semantics is an interesting &ldquo;everything is X&rdquo; approach to get the benefits of functional purity without giving up on mutable hash tables.
+This style of programming doesn&rsquo;t work with cyclic data structures (values are always trees), so indexes are often used to express auxiliary relations.
+This, however, gets in a way of type-based generic programming &mdash; a <code>T</code> is no longer <code>Comparable</code>, only <code>T + Context</code> is.
+A potential fix for that is to base generic programming on explicit dictionary passing combined with implicit value parameter inference.</p>
+<p>Is there a language like this already?</p>
+<p>Links:</p>
+<ul>
+<li>
+<a href="https://www.val-lang.dev">Val</a>
+</li>
+<li>
+<a href="https://arxiv.org/pdf/1512.01895.pdf">Modular implicits</a>
+</li>
+<li>
+<a href="https://rust-lang.github.io/async-fundamentals-initiative/evaluation/design/with_clauses.html">With clauses</a>
+</li>
+<li>
+<a href="https://www.youtube.com/watch?v=ctS8FzqcRug">Implementing Swift generics</a>
+</li>
+</ul>
+<style>
+.display { display: block; margin: 1em 0; text-align: center }
+</style>
+]]></content>
+</entry>
+
+<entry>
+<title type="text">Data Oriented Parallel Value Interner</title>
+<link href="https://matklad.github.io/2023/04/23/data-oriented-parallel-value-interner.html" rel="alternate" type="text/html" title="Data Oriented Parallel Value Interner" />
+<published>2023-04-23T00:00:00+00:00</published>
+<updated>2023-04-23T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2023/04/23/data-oriented-parallel-value-interner</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[In this post, I will present a theoretical design for an interner.
+It should be fast, but there will be no benchmarks as I haven't implemented the thing.
+So it might actually be completely broken or super slow for one reason or another.
+Still, I think there are a couple of neat ideas, which I would love to call out.]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2023/04/23/data-oriented-parallel-value-interner.html"><![CDATA[
+    <h1>
+    <a href="#Data-Oriented-Parallel-Value-Interner">Data Oriented Parallel Value Interner <time datetime="2023-04-23">Apr 23, 2023</time></a>
+    </h1>
+<p>In this post, I will present a theoretical design for an interner.
+It should be fast, but there will be no benchmarks as I haven&rsquo;t implemented the thing.
+So it might actually be completely broken or super slow for one reason or another.
+Still, I think there are a couple of neat ideas, which I would love to call out.</p>
+<p>The context for the post is <a href="https://www.youtube.com/watch?v=AqDdWEiSwMM">this talk</a> by Andrew Kelley, which notices that it&rsquo;s hard to reconcile interning and parallel compilation.
+This is something I have been thinking about a lot in the context of rust-analyzer, which relies heavily on pointers, atomic reference counting and indirection to make incremental and parallel computation possible.</p>
+<p>And yes, interning (or, more generally, assigning unique identities to things) is a big part of that.</p>
+<p>Usually, compilers intern strings, but we will be interning trees today.
+Specifically, we will be looking at something like a <a href="https://github.com/ziglang/zig/blob/b95cdf0aeb4d4d31c0b6a54302ef61baec8f6773/src/value.zig#L20"><code>Value</code></a> type from the Zig compiler.
+In a simplified RAII style it could look like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">const</span> Value = <span class="hl-keyword">union</span>(<span class="hl-keyword">enum</span>) {</code>
+<code>    <span class="hl-comment">// A bunch of payload-less variants.</span></code>
+<code>    u1_type,</code>
+<code>    u8_type,</code>
+<code>    i8_type,</code>
+<code></code>
+<code>    <span class="hl-comment">// A number.</span></code>
+<code>    <span class="hl-type">u64</span>: <span class="hl-type">u64</span>,</code>
+<code></code>
+<code>    <span class="hl-comment">// A declaration.</span></code>
+<code>    <span class="hl-comment">// Declarations and types are also values in Zig.</span></code>
+<code>    decl: DeclIndex,</code>
+<code></code>
+<code>    <span class="hl-comment">// Just some bytes for a string.</span></code>
+<code>    bytes: []<span class="hl-type">u8</span>,</code>
+<code></code>
+<code>    <span class="hl-comment">// The interesting case which makes it a tree.</span></code>
+<code>    <span class="hl-comment">// This is how struct instances are represented.</span></code>
+<code>    aggregate: []Value,</code>
+<code>};</code>
+<code></code>
+<code><span class="hl-keyword">const</span> DeclIndex = <span class="hl-type">u32</span>;</code></pre>
+
+</figure>
+<p>Such values are individually heap-allocated and in general are held behind pointers.
+Zig&rsquo;s compiler adds a couple of extra tricks to this structure, like not overallocating for small enum variants:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">const</span> Value = <span class="hl-keyword">struct</span> {</code>
+<code>    payload: <span class="hl-operator">*</span>Payload</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-comment">// Payload is an &quot;abstract&quot; type:</span></code>
+<code><span class="hl-comment">// There&#x27;s some data following the `tag`,</span></code>
+<code><span class="hl-comment">// whose type and size is determined by</span></code>
+<code><span class="hl-comment">// this `tag`.</span></code>
+<code><span class="hl-keyword">const</span> Payload = <span class="hl-keyword">struct</span> {</code>
+<code>    tag: Tag,</code>
+<code></code>
+<code>    <span class="hl-keyword">pub</span> <span class="hl-keyword">const</span> U64 = <span class="hl-keyword">struct</span> {</code>
+<code>        base: Payload,</code>
+<code>        data: <span class="hl-type">u64</span>,</code>
+<code>    };</code>
+<code></code>
+<code>    <span class="hl-keyword">pub</span> <span class="hl-keyword">const</span> Decl = <span class="hl-keyword">struct</span> {</code>
+<code>        base: Payload,</code>
+<code>        decl: DeclIndex,</code>
+<code>    };</code>
+<code>}</code></pre>
+
+</figure>
+<p>But how do we intern this stuff, such that:</p>
+<ul>
+<li>
+values are just <code>u32</code> rather than full pointers,
+</li>
+<li>
+values are deduplicated,
+</li>
+<li>
+and this whole construct works efficiently even if there are multiple threads
+using our interner simultaneously?
+</li>
+</ul>
+<p>Let&rsquo;s start with concurrent <code>SegmentedList</code>:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span><span class="hl-function"> SegmentList</span>(<span class="hl-keyword">comptime</span> T: <span class="hl-type">type</span>) <span class="hl-type">type</span> {</code>
+<code>    <span class="hl-keyword">return</span> <span class="hl-keyword">struct</span> {</code>
+<code>        echelons: [<span class="hl-numbers">31</span>]?[<span class="hl-operator">*</span>]T,</code>
+<code>    };</code>
+<code>}</code></pre>
+
+</figure>
+<p>Segmented list is like <code>ArrayList</code> with an extra super power that pushing new items does not move/invalidate old ones.
+In normal <code>ArrayList</code>, when the backing storage fills up, you allocate a slice twice as long, copy over the elements from the old slice and then destroy it.
+In <code>SegmentList</code>, you leave the old slice where it is, and just allocate a new one.</p>
+<p>Now, as we are writing an interner and want to use <code>u32</code> for an index, we know that we need to store <code>1&lt;&lt;32</code> items max.
+But that means that we&rsquo;ll need at most 31 segments for our <code>SegmentList</code>:</p>
+
+<figure class="code-block">
+
+
+<pre><code>[1 &lt;&lt; 0]T</code>
+<code>[1 &lt;&lt; 1]T</code>
+<code>[1 &lt;&lt; 2]T</code>
+<code>...</code>
+<code>[1 &lt;&lt; 31]T</code></pre>
+
+</figure>
+<p>So we can just &ldquo;pre-allocate&rdquo; array of 31 <em>pointers</em> to the segments, hence</p>
+
+<figure class="code-block">
+
+
+<pre><code>echelons: [<span class="hl-numbers">31</span>]?[<span class="hl-operator">*</span>]T,</code></pre>
+
+</figure>
+<p>If we want to be more precise with types, we can even use a tuple whose elements are nullable pointers to arrays of power-of-two sizes:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span><span class="hl-function"> SegmentList</span>(<span class="hl-keyword">comptime</span> T: <span class="hl-type">type</span>) <span class="hl-type">type</span> {</code>
+<code>    <span class="hl-keyword">return</span> <span class="hl-keyword">struct</span> {</code>
+<code>        echelons: std.meta.Tuple(get_echelons(<span class="hl-numbers">31</span>, T)),</code>
+<code>    };</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">fn</span><span class="hl-function"> get_echelons</span>(</code>
+<code>    <span class="hl-keyword">comptime</span> level: <span class="hl-type">usize</span>,</code>
+<code>    <span class="hl-keyword">comptime</span> T: <span class="hl-type">type</span>,</code>
+<code>) []<span class="hl-keyword">const</span> <span class="hl-type">type</span> {</code>
+<code>    <span class="hl-keyword">if</span> (level <span class="hl-operator">==</span> <span class="hl-numbers">0</span>) <span class="hl-keyword">return</span> <span class="hl-operator">&amp;</span>.{ ?<span class="hl-operator">*</span>[<span class="hl-numbers">1</span>]T };</code>
+<code>    <span class="hl-keyword">return</span> get_echelons(level <span class="hl-operator">-</span> <span class="hl-numbers">1</span>, T) <span class="hl-operator">+</span><span class="hl-operator">+</span> .{ ?<span class="hl-operator">*</span>[<span class="hl-numbers">1</span> <span class="hl-operator">&lt;&lt;</span> level]T };</code>
+<code>}</code></pre>
+
+</figure>
+<p>Indexing into such an echeloned array is still O(1).
+Here&rsquo;s how echelons look in terms of indexes</p>
+
+<figure class="code-block">
+
+
+<pre><code>0                      = 1  total</code>
+<code>1 2                    = 3  total</code>
+<code>3 4 5 6                = 7  total</code>
+<code>7 8 9 10 11 12 13 14   = 15 total</code></pre>
+
+</figure>
+<p>The first <code>n</code> echelons hold <code>2**n - 1</code> elements.
+So, if we want to find the <code>i</code>th item, we first find the echelon it is in, by computing the nearest smaller power of two of <code>i + 1</code>, and then index into the echelon with <code>i - (2**n - 1)</code>, give or take a <code>+1</code> here or there.</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-comment">// Warning: untested, probably has a couple of bugs.</span></code>
+<code></code>
+<code><span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span><span class="hl-function"> get</span>(self: Self, index: <span class="hl-type">u32</span>) <span class="hl-operator">*</span><span class="hl-keyword">const</span> T {</code>
+<code>    <span class="hl-keyword">const</span> e = self.get_echelon(index);</code>
+<code>    <span class="hl-keyword">const</span> i = index <span class="hl-operator">-</span> (<span class="hl-numbers">1</span> <span class="hl-operator">&lt;&lt;</span> e <span class="hl-operator">-</span> <span class="hl-numbers">1</span>);</code>
+<code>    <span class="hl-keyword">return</span> <span class="hl-operator">&amp;</span>self.echelons[e].?[i];</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-keyword">fn</span><span class="hl-function"> get_echelon</span>(index: <span class="hl-type">u32</span>) <span class="hl-type">u5</span> {</code>
+<code>    <span class="hl-built_in">@ctz</span>(std.math.floorPowerOfTwo(index <span class="hl-operator">+</span> <span class="hl-numbers">1</span>));</code>
+<code>}</code></pre>
+
+</figure>
+<p>Note that we pre-allocate an array of pointers to segments, but not the segments themselves.
+Pointers are nullable, and we allocate new segments lazily, when we actually write to the corresponding indexes.
+This structure is very friendly to parallel code.
+Reading items works because items are never reallocated.
+Lazily allocating new echelons is easy, because the position of the pointer is fixed.
+That is, we can do something like this to insert an item at position <code>i</code>:</p>
+<ol>
+<li>
+compute the echelon index
+</li>
+<li>
+<code>@atomicLoad(.Acquire)</code> the pointer
+</li>
+<li>
+if the pointer is null
+<ul>
+<li>
+allocate the echelon
+</li>
+<li>
+<code>@cmpxchgStrong(.Acquire, .Release)</code> the pointer
+</li>
+<li>
+free the redundant echelon if exchange failed
+</li>
+</ul>
+</li>
+<li>
+insert the item
+</li>
+</ol>
+<p>Notice how we don&rsquo;t need any locks or even complicated atomics, at the price of sometimes doing a second redundant allocation.</p>
+<p>One thing this data structure is bad at is doing bounds checks and tracking which items are actually initialized.
+For the interner use-case, we will rely on an invariant that we always use indexes provided to use by someone else, such that possession of the index signifies that:</p>
+<ul>
+<li>
+the echelon holding the item is allocated
+</li>
+<li>
+the item itself is initialized
+</li>
+<li>
+there&rsquo;s the relevant happens-before established
+</li>
+</ul>
+<p>If, instead, we manufacture an index out of thin air, we might hit all kinds of nasty behavior without any bullet-proof way to check that.</p>
+<p>Okay, now that we have this <code>SegmentList</code>, how would we use them?</p>
+<p>Recall that our simplified value is</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">const</span> Value = <span class="hl-keyword">union</span>(<span class="hl-keyword">enum</span>) {</code>
+<code>    <span class="hl-comment">// A bunch of payload-less variants.</span></code>
+<code>    u1_type,</code>
+<code>    u8_type,</code>
+<code>    i8_type,</code>
+<code></code>
+<code>    <span class="hl-comment">// A number.</span></code>
+<code>    <span class="hl-type">u64</span>: <span class="hl-type">u64</span>,</code>
+<code></code>
+<code>    <span class="hl-comment">// A declaration.</span></code>
+<code>    <span class="hl-comment">// Declarations and types are also values in Zig.</span></code>
+<code>    decl: Decl,</code>
+<code></code>
+<code>    <span class="hl-comment">// Just some bytes for a string.</span></code>
+<code>    bytes: []<span class="hl-type">u8</span>,</code>
+<code></code>
+<code>    <span class="hl-comment">// The interesting case which makes it a tree.</span></code>
+<code>    <span class="hl-comment">// This is how struct instances are represented.</span></code>
+<code>    aggregate: []Value,</code>
+<code>};</code>
+<code></code>
+<code><span class="hl-comment">// Index of a declaration.</span></code>
+<code><span class="hl-keyword">const</span> Decl = <span class="hl-type">u32</span>;</code></pre>
+
+</figure>
+<p>Of course we will struct-of-array it now, to arrive at something like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">const</span> Value = <span class="hl-type">u32</span>;</code>
+<code></code>
+<code><span class="hl-keyword">const</span> Tag = <span class="hl-keyword">enum</span>(<span class="hl-type">u8</span>) {</code>
+<code>    u1_type, u8_type, i8_type,</code>
+<code>    <span class="hl-type">u64</span>, decl, bytes, aggregate,</code>
+<code>};</code>
+<code></code>
+<code><span class="hl-keyword">const</span> ValueTable = <span class="hl-keyword">struct</span> {</code>
+<code>    tag: SegmentList(Tag),</code>
+<code>    data: SegmentList(<span class="hl-type">u32</span>),</code>
+<code></code>
+<code>    <span class="hl-type">u64</span>: SegmentList(<span class="hl-type">u64</span>),</code>
+<code>    aggregate: SegmentList([]Value),</code>
+<code>    bytes: SegmentList([]<span class="hl-type">u8</span>),</code>
+<code>};</code></pre>
+
+</figure>
+<p>A <code>Value</code> is now an index.
+This index works for two fields of <code>ValueTable</code>, <code>tag</code> and <code>data</code>.
+That is, the index addresses five bytes of payload, which is all that is needed for small values.
+For large tags like <code>aggregate</code>, the <code>data</code> field stores an index into the corresponding payload <code>SegmentList</code>.</p>
+<p>That is, every value allocates a <code>tag</code> and <code>data</code> elements, but only actual <code>u64</code>s occupy a slot in <code>u64</code> <code>SegmentList</code>.</p>
+<p>So now we can write a <code>lookup</code> function which takes a value index and reconstructs a value from pieces:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">const</span> ValueFull = <span class="hl-keyword">union</span>(<span class="hl-keyword">enum</span>) {</code>
+<code>    u1_type,</code>
+<code>    u8_type,</code>
+<code>    i8_type,</code>
+<code>    <span class="hl-type">u64</span>: <span class="hl-type">u64</span>,</code>
+<code>    decl: Decl,</code>
+<code>    bytes: []<span class="hl-type">u8</span>,</code>
+<code>    aggregate: []Value,</code>
+<code>};</code>
+<code></code>
+<code><span class="hl-keyword">fn</span><span class="hl-function"> lookup</span>(self: Self, value: Value) ValueFull {</code>
+<code>    <span class="hl-keyword">const</span> tag = self.tag.get(value);</code>
+<code>    <span class="hl-keyword">switch</span> (tag) {</code>
+<code>        .aggregate =&gt; <span class="hl-keyword">return</span> ValueFull{</code>
+<code>            .aggregate = self.aggregate.get(self.data(value)),</code>
+<code>        },</code>
+<code>    }</code>
+<code>}</code></pre>
+
+</figure>
+<p>Note that here <code>ValueFull</code> is non-owning type, it is a <em>reference</em> into the actual data.
+Note as well that aggregates now store a slice of indexes, rather than a slice of pointers.</p>
+<p>Now let&rsquo;s deal with creating and interning values.
+We start by creating a <code>ValueFull</code> using data owned by us
+(e.g. if we are creating an aggregate, we may use a stack-allocated array as a backing store for <code>[]Value</code> slice).
+Then we ask <code>ValueTable</code> to intern the data:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span><span class="hl-function"> intern</span>(self: <span class="hl-operator">*</span>Self, value_full: ValueFull) Value {</code>
+<code>}</code></pre>
+
+</figure>
+<p>If the table already contains an equal value, its index is returned.
+Otherwise, the table <em>copies</em> <code>ValueFull</code> data such that it is owned by the table itself, and returns a freshly allocated index.</p>
+<p>For bookkeeping, we&rsquo;ll need a hash table with existing values and a counter to use for a fresh index, something like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">const</span> ValueTable = <span class="hl-keyword">struct</span> {</code>
+<code>    value_set: AutoHashMapUnmanaged(Value, <span class="hl-type">void</span>),</code>
+<code>    value_count: <span class="hl-type">u32</span>,</code>
+<code>    tag: SegmentList(Tag),</code>
+<code>    index: SegmentList(<span class="hl-type">u32</span>),</code>
+<code></code>
+<code>    u64_count: <span class="hl-type">u32</span>,</code>
+<code>    <span class="hl-type">u64</span>: SegmentList(<span class="hl-type">u64</span>),</code>
+<code></code>
+<code>    aggregate_count: <span class="hl-type">u32</span>,</code>
+<code>    aggregate: SegmentList([]Value),</code>
+<code></code>
+<code>    bytes_count: <span class="hl-type">u32</span>,</code>
+<code>    bytes: SegmentList([]<span class="hl-type">u8</span>),</code>
+<code></code>
+<code>    <span class="hl-keyword">pub</span> <span class="hl-keyword">fn</span><span class="hl-function"> intern</span>(self: <span class="hl-operator">*</span>Self, value_full: ValueFull) Value {</code>
+<code>        ...</code>
+<code>    }</code>
+<code>};</code></pre>
+
+</figure>
+<p>Pay attention to <code>_count</code> fields &mdash; we have <code>value_count</code> guarding the <code>tag</code> and <code>index</code>, and separate counts for specific kinds of values, as we don&rsquo;t want to allocate, e.g. an <code>u64</code> for <em>every</em> value.</p>
+<p>Our hashmap is actually a set which stores <code>u32</code> integers, but uses <code>ValueFull</code> to do a lookup: when we consider interning a new <code>ValueFull</code>, we don&rsquo;t know its index yet.
+Luckily, <code>getOrPutAdapted</code> API provides the required flexibility.
+We can use it to compare a <code>Value</code> (index) and a <code>ValueFull</code> by hashing a <code>ValueFull</code> and doing component-wise comparisons in the case of a collision.</p>
+<p>Note that, because of interning, we can also hash <code>ValueFull</code> efficiently!
+As any subvalues in <code>ValueFull</code> are guaranteed to be already interned, we can rely on shallow hash and hash only child value&rsquo;s indexes, rather than their data.</p>
+<p>This is a nice design for a single thread, but how do we make it thread safe?
+The straightforward solution would be to slap a mutex around the logic in <code>intern</code>.</p>
+<p>This actually is not as bad as it seems, as we&rsquo;d need a lock only in <code>intern</code>, and <code>lookup</code> would work without any synchronization whatsoever.
+Recall that obtaining an index of a value is a proof that the value was properly published.
+Still, we expect to intern a lot of values, and that mutex is all but guaranteed to become a point of contention.
+And some amount of contention is inevitable here &mdash; if two threads try to intern two identical values, we <em>want</em> them to clash, communicate, and end up with a single, shared value.</p>
+<p>There&rsquo;s a rather universal recipe for dealing with contention &mdash; you can shard the data.
+In our case, rather than using something like</p>
+
+<figure class="code-block">
+
+
+<pre><code>mutex: Mutex,</code>
+<code>value_set: AutoHashMapUnmanaged(Value, <span class="hl-type">void</span>),</code></pre>
+
+</figure>
+<p>we can do</p>
+
+<figure class="code-block">
+
+
+<pre><code>mutex: [<span class="hl-numbers">16</span>]Mutex,</code>
+<code>value_set: [<span class="hl-numbers">16</span>]AutoHashMapUnmanaged(Value, <span class="hl-type">void</span>),</code></pre>
+
+</figure>
+<p>That is, we create not one, but sixteen hashmaps, and use, e.g., lower 4 bits of the hash to decide which mutex and hashmap to use.
+Depending on the structure of the hashmap, such locks could even be pushed as far as individual buckets.</p>
+<p>This doesn&rsquo;t solve all our contention problems &mdash; now that several threads can simultaneously intern values (as long as they are hashed into different shards) we have to make all <code>count</code> variables atomic.
+So we essentially moved the single global point of contention from a mutex to <code>value_count</code> field, which is incremented for every interned value.</p>
+<p>We can apply the sharding trick again, and shard all our <code>SegmentList</code>s.
+But that would mean that we have to dedicate some bits from <code>Value</code> index to the shard number, and to waste some extra space for non-perfectly balanced shards.</p>
+<p>There&rsquo;s a better way &mdash; we can amortize atomic increments by allowing each thread to bulk-allocate indexes.
+That is, if a thread wants to allocate a new value, it atomically increments <code>value_cont</code> by, say, <code>1024</code>, and uses those indexes for the next thousand allocations.
+In addition to <code>ValueTable</code>, each thread now gets its own distinct <code>LocalTable</code>:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">const</span> LocalTable = <span class="hl-keyword">struct</span> {</code>
+<code>    global: <span class="hl-operator">*</span>ValueTable,</code>
+<code></code>
+<code>    <span class="hl-comment">// Invariant: if any `index % 1024 == 0`,</span></code>
+<code>    <span class="hl-comment">// it&#x27;s time to visit `global` to</span></code>
+<code>    <span class="hl-comment">// refill our budget via atomic fetchAndAdd.</span></code>
+<code>    value_index: <span class="hl-type">u32</span>,</code>
+<code>    u64_index: <span class="hl-type">u32</span>,</code>
+<code>    aggregate_index: <span class="hl-type">u32</span>,</code>
+<code>    bytes_index: <span class="hl-type">u32</span>,</code>
+<code>};</code></pre>
+
+</figure>
+<p>An attentive reader would notice a bonus here: in this setup, a thread allocates a contiguous chunk of values.
+It is reasonable to assume that values allocated together would also be used together, so we potentially increase future spatial locality here.</p>
+<p>Putting everything together, the pseudo-code for interning would look like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span><span class="hl-function"> intern</span>(table: <span class="hl-operator">*</span>LocalTable, value_full: ValueFull) Value {</code>
+<code>    <span class="hl-keyword">const</span> hash = shallow_hash(value_full);</code>
+<code></code>
+<code>    <span class="hl-comment">// Find &amp; lock the shard.</span></code>
+<code>    <span class="hl-keyword">const</span> shard = hash <span class="hl-operator">&amp;</span> <span class="hl-numbers">0xF</span>;</code>
+<code>    let mutex = <span class="hl-operator">&amp;</span>table.global.mutex[shard];</code>
+<code>    let value_set = <span class="hl-operator">&amp;</span>table.global.value_set[shard]</code>
+<code></code>
+<code>    mutex.lock();</code>
+<code>    <span class="hl-keyword">defer</span> mutex.unlock();</code>
+<code></code>
+<code>    <span class="hl-comment">// Either find that this value has been interned already...</span></code>
+<code>    <span class="hl-keyword">const</span> gop = value_set.get_or_put(hash, value_full, ...);</code>
+<code>    <span class="hl-keyword">if</span> (gop.found_existing) <span class="hl-keyword">return</span> got.key_ptr.<span class="hl-operator">*</span>;</code>
+<code></code>
+<code>    <span class="hl-comment">// ... or proceed to allocate a new index for it</span></code>
+<code></code>
+<code>    <span class="hl-keyword">if</span> (table.tag_index <span class="hl-operator">&amp;</span> <span class="hl-numbers">0xFF</span> <span class="hl-operator">==</span> <span class="hl-numbers">0</span>) {</code>
+<code>        <span class="hl-comment">// Run out of indexes, refill our budget!</span></code>
+<code>        table.tag_index = <span class="hl-built_in">@atomicRmw</span>(</code>
+<code>            <span class="hl-type">u32</span>, <span class="hl-operator">&amp;</span>table.global.value_count,</code>
+<code>            .Add, <span class="hl-numbers">0xFF</span>,</code>
+<code>            .Relaxed,</code>
+<code>        );</code>
+<code>    }</code>
+<code></code>
+<code>    <span class="hl-comment">// Assign the index to the new value</span></code>
+<code>    <span class="hl-comment">// and put it into the hash map.</span></code>
+<code>    <span class="hl-keyword">const</span> value = table.tag_index;</code>
+<code>    table.tag_index <span class="hl-operator">+=</span> <span class="hl-numbers">1</span>;</code>
+<code>    gop.key_ptr.<span class="hl-operator">*</span> = value;</code>
+<code></code>
+<code>    <span class="hl-comment">// Now initialize the value.</span></code>
+<code>    <span class="hl-comment">// Note that we still hold shard&#x27;s mutex at this point.</span></code>
+<code></code>
+<code>    <span class="hl-keyword">switch</span> (value_full) {</code>
+<code>        .aggregate =&gt; <span class="hl-operator">|</span>fields<span class="hl-operator">|</span> {</code>
+<code>            <span class="hl-comment">// Initialize the tag, common for all values.</span></code>
+<code>            table.global.tag.set(value, .aggregate);</code>
+<code></code>
+<code>            <span class="hl-comment">// Allocate tag-specific data using</span></code>
+<code>            <span class="hl-comment">// the same atomic add trick.</span></code>
+<code>            <span class="hl-keyword">if</span> (table.aggregate_index <span class="hl-operator">&amp;</span> <span class="hl-numbers">0xFF</span> <span class="hl-operator">==</span> <span class="hl-numbers">0</span>) {</code>
+<code>                table.aggregate_index = <span class="hl-built_in">@atomicRmw</span>(</code>
+<code>                    <span class="hl-type">u32</span>, <span class="hl-operator">&amp;</span>table.global.aggregate_count,</code>
+<code>                    .Add, <span class="hl-numbers">0xFF</span>,</code>
+<code>                    .Relaxed,</code>
+<code>                );</code>
+<code>            }</code>
+<code>            <span class="hl-keyword">const</span> index = table.aggregate_index;</code>
+<code>            table.aggregate_index <span class="hl-operator">+=</span> <span class="hl-numbers">1</span>;</code>
+<code></code>
+<code>            <span class="hl-comment">// Make it possible to find tag-specific data</span></code>
+<code>            <span class="hl-comment">// from the value index.</span></code>
+<code>            table.global.index.set(value, index);</code>
+<code></code>
+<code>            <span class="hl-comment">// `value_full` is borrowed, so we must</span></code>
+<code>            <span class="hl-comment">// create a copy that we own.</span></code>
+<code>            <span class="hl-keyword">const</span> fields_owned = allocator.dup(fields)</code>
+<code>                <span class="hl-keyword">catch</span> <span class="hl-keyword">unreachable</span>;</code>
+<code></code>
+<code>            table.global.aggregate.set(index, fields_owned);</code>
+<code>        }</code>
+<code>    }</code>
+<code></code>
+<code>    <span class="hl-keyword">return</span> value;</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-comment">// Code for assigning an index of a SegmentList.</span></code>
+<code><span class="hl-comment">// Shard&#x27;s mutex guarantees exclusive access to the index.</span></code>
+<code><span class="hl-comment">// Accesses to the echelon might race though.</span></code>
+<code><span class="hl-keyword">fn</span><span class="hl-function"> set</span>(list: SegmentList(T), index: <span class="hl-type">u32</span>, value: T) {</code>
+<code>    <span class="hl-keyword">const</span> e = list.get_echelon(index);</code>
+<code>    <span class="hl-keyword">const</span> i = index <span class="hl-operator">-</span> ((<span class="hl-numbers">1</span> <span class="hl-operator">&lt;&lt;</span> e) <span class="hl-operator">-</span> <span class="hl-numbers">1</span>);</code>
+<code></code>
+<code>    <span class="hl-keyword">var</span> echelon = <span class="hl-built_in">@atomicLoad</span>(?[<span class="hl-operator">*</span>]T, <span class="hl-operator">&amp;</span>list.echelons[e], .Acquire);</code>
+<code>    <span class="hl-keyword">if</span> (echelon <span class="hl-operator">==</span> <span class="hl-literal">null</span>) {</code>
+<code>        <span class="hl-comment">// Race with other threads to allocate the echelon.</span></code>
+<code>        <span class="hl-keyword">const</span> echelon_new = allocator.alloc(T, <span class="hl-numbers">1</span> <span class="hl-operator">&lt;&lt;</span> e)</code>
+<code>            <span class="hl-keyword">catch</span> <span class="hl-keyword">unreachable</span>;</code>
+<code></code>
+<code>        <span class="hl-keyword">const</span> modified = <span class="hl-built_in">@cmpxchgStrong</span>(</code>
+<code>            ?[<span class="hl-operator">*</span>]T, <span class="hl-operator">&amp;</span>list.echelons[e],</code>
+<code>            <span class="hl-literal">null</span>, echelon_new,</code>
+<code>            .Release, .Acquire,</code>
+<code>        );</code>
+<code></code>
+<code>        <span class="hl-keyword">if</span> (modified) <span class="hl-operator">|</span>echelon_modified<span class="hl-operator">|</span> {</code>
+<code>            <span class="hl-comment">// Another thread won, free our useless allocation.</span></code>
+<code>            echelon = echelon_modified</code>
+<code>            allocator.free(echelon_new);</code>
+<code>        } <span class="hl-keyword">else</span> {</code>
+<code>            echelon = echelon_new;</code>
+<code>        }</code>
+<code>    }</code>
+<code></code>
+<code>    echelon.?[i] = value;</code>
+<code>}</code></pre>
+
+</figure>
+<p>Note that it is important that we <em>don&rsquo;t</em> release the mutex immediately after assigning the index for a value, but rather keep it locked all the way until we fully copied thee value into the <code>ValueTable</code>.
+If we release the lock earlier, a different thread which tries to intern the same value would get the correct index, but would risk accessing partially-initialized data.
+This can be optimized a bit by adding value-specific lock (or rather, a <a href="https://github.com/ziglang/zig/blob/b95cdf0aeb4d4d31c0b6a54302ef61baec8f6773/lib/std/once.zig"><code>Once</code></a>).
+So we use the shard lock to assign an index, then release the shard lock, and use value-specific lock to do the actual (potentially slow) initialization.</p>
+<p>And that&rsquo;s all I have for today!
+Again, I haven&rsquo;t implemented this, so I have no idea how fast or slow it actually is.
+But the end result looks rather beautiful, and builds upon many interesting ideas:</p>
+<ul>
+<li>
+<p><code>SegmentList</code> allows to maintain index stability despite insertions.</p>
+</li>
+<li>
+<p>There will be at most 31 echelons in a <code>SegmentList</code>, so you can put pointes to them into an array, removing the need to synchronize to read an echelon.</p>
+</li>
+<li>
+<p>With this setup, it becomes easy to initialize a new echelon with a single CAS.</p>
+</li>
+<li>
+<p>Synchronization is required only when creating a new item.
+If you trust indexes, you can use them to carry happens-before.</p>
+</li>
+<li>
+<p>In a struct-of-arrays setup for enums, you can save space by requiring that an array for a specific variant is just as long as it needs to be.</p>
+</li>
+<li>
+<p>One benefit of interning trees is that hash function becomes a shallow operation.</p>
+</li>
+<li>
+<p>Optimal interners use hashmaps in a fancy way, where the key is not what you actually store in the hashmap.
+I have two related posts about that,
+<a href="https://matklad.github.io/2020/03/22/fast-simple-rust-interner.html">&ldquo;Fast and Simple Rust Interner&rdquo;</a> and
+<a href="https://matklad.github.io/2020/12/28/csdi.html">&ldquo;Call Site Dependency Injection&rdquo;</a>.</p>
+</li>
+<li>
+<p>Sharding is an effective way to reduce contention if you are dealing with something like a shared hashmap.</p>
+</li>
+<li>
+<p>For counters, one alternative to sharding is batching up the increments.</p>
+</li>
+</ul>
+<p>Discussion on <a href="https://old.reddit.com/r/Zig/">/r/Zig</a>.</p>
+]]></content>
+</entry>
+
+<entry>
+<title type="text">Reasonable Bootstrap</title>
+<link href="https://matklad.github.io/2023/04/13/reasonable-bootstrap.html" rel="alternate" type="text/html" title="Reasonable Bootstrap" />
+<published>2023-04-13T00:00:00+00:00</published>
+<updated>2023-04-13T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2023/04/13/reasonable-bootstrap</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[Compilers for systems programming languages (C, C++, Rust, Zig) tend to be implemented in the languages themselves.
+The idea being that the current version of the compiler is built using some previous version.
+But how can you get a working compiler if you start out from nothing?]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2023/04/13/reasonable-bootstrap.html"><![CDATA[
+    <h1>
+    <a href="#Reasonable-Bootstrap">Reasonable Bootstrap <time datetime="2023-04-13">Apr 13, 2023</time></a>
+    </h1>
+<p>Compilers for systems programming languages (C, C++, Rust, Zig) tend to be implemented in the languages themselves.
+The idea being that the current version of the compiler is built using some previous version.
+But how can you get a working compiler if you start out from nothing?</p>
+<p>The traditional answer has been &ldquo;via bootstrap chain&rdquo;.
+You start with the first version of the compiler implemented in assembly, use that to compile the latest version of the compiler it is capable of compiling, then repeat.
+This historically worked OK because older versions of GCC were implemented in C (and C is easy to provide a compiler for) and, even today, GCC itself is very conservative in using language features.
+I believe GCC 10.4 released in 2022 can be built with just a C++98 compiler.
+So, if you start with a C compiler, it&rsquo;s not too many hops to get to the latest GCC.</p>
+<p>This doesn&rsquo;t feel entirely satisfactory, as this approach requires artificially constraining the compiler itself to be very conservative.
+Rust does the opposite of that.
+Rust requires that rustc 1.x.0 is built by rustc 1.x-1.0, and there&rsquo;s a new rustc version every six weeks.
+This seems like a very reasonable way to build compilers, <em>but</em> it also is incompatible with chain bootstrapping.
+In the limit, one would need infinite time to compile modern rustc ex nihilo!</p>
+<p>I <em>think</em> there&rsquo;s a better way if the goal is to compile the world from nothing.
+To cut to the chase, the minimal bootstrap seed for Rust could be:</p>
+<ul>
+<li>
+source code for current version of the compiler
+</li>
+<li>
+this source code compiled to core WebAssembly
+</li>
+</ul>
+<p>Bootstrapping from this should be easy.
+WebAssembly is a very small language, so a runtime for it can be built out of nothing.
+Using this runtime, and rustc-compiled-to-wasm we can re-compile rustc itself.
+Then, we can either cross-compile it to the architecture we need, if that architecture is supported by rustc.
+If the architecture is <em>not</em> supported, we can implement a new backend for that arch in Rust, compile our modified compiler to wasm, and then cross-compile to the desired target.</p>
+<p>More complete bootstrap seed would include:</p>
+<ul>
+<li>
+Informal specification of the Rust language, to make sense of the source code.
+</li>
+<li>
+Rust source code for the compiler, which also doubles as a formal specification of the language.
+</li>
+<li>
+Informal specification of WebAssembly, to make sense of .wasm parts of the bootstrap seed.
+</li>
+<li>
+.wasm code for the rust compiler, which triple-checks the Rust specification.
+</li>
+<li>
+Rust implementation of a WebAssembly interpreter, which doubles as a formal spec for WebAssembly.
+</li>
+</ul>
+<p>And this seed is provided for every version of a language.
+This way, it is possible to bootstrap, in constant time, any version of Rust.</p>
+<p>Specific properties we use for this setup:</p>
+<ul>
+<li>
+Compilation is deterministic.
+Compiling bootstrap sources with bootstrap .wasm blob should result in a byte-for-byte identical wasm blob.
+</li>
+<li>
+WebAssembly is target-agnostic.
+It describes abstract computation, which is completely independent from the host architecture.
+</li>
+<li>
+WebAssembly is simple.
+Implementing a WebAssembly interpreter is easy in whatever computation substrate you have.
+</li>
+<li>
+Compiler is a cross compiler.
+We don&rsquo;t want to bootstrap <em>just</em> the WebAssembly backend, we want to bootstrap everything.
+This requires that the WebAssembly version of the compiler can generate the code for arbitrary architectures.
+</li>
+</ul>
+<p>This setup does not prevent the trusting trust attack.
+However, it is possible to rebuild the bootstrap seed using a different compiler.
+Using that compiler to compiler rustc to .wasm will produce a different blob.
+But using that .wasm to recompile rustc again should produce the blob from the seed (unless, of course, there&rsquo;s a trojan in the seed).</p>
+<p>This setup does not minimize the size of opaque binary blobs in the seed.
+The size of the .wasm would be substantial.
+This setup, however, does minimize the total size of the seed.
+In the traditional bootstrap, source code for rustc 1.0.0, rustc 1.1.0, rustc 1.2.0, etc would also have to be part of the seed.
+For the suggested approach, you need only one version, at the cost of a bigger binary blob.</p>
+<p>This idea is not new.
+I <em>think</em> it was popularized by Pascal with p-code.
+OCaml uses a similar strategy.
+Finally, <a href="https://ziglang.org/news/goodbye-cpp/">Zig</a> makes an important observation that we no longer need to implement language-specific virtual machines, because WebAssembly is a good fit for the job.</p>
+]]></content>
+</entry>
+
+<entry>
+<title type="text">Can You Trust a Compiler to Optimize Your Code?</title>
+<link href="https://matklad.github.io/2023/04/09/can-you-trust-a-compiler-to-optimize-your-code.html" rel="alternate" type="text/html" title="Can You Trust a Compiler to Optimize Your Code?" />
+<published>2023-04-09T00:00:00+00:00</published>
+<updated>2023-04-09T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2023/04/09/can-you-trust-a-compiler-to-optimize-your-code</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[More or less the title this time, but first, a story about SIMD. There are three
+levels of understanding how SIMD works (well, at least I am level 3 at the moment):]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2023/04/09/can-you-trust-a-compiler-to-optimize-your-code.html"><![CDATA[
+    <h1>
+    <a href="#Can-You-Trust-a-Compiler-to-Optimize-Your-Code">Can You Trust a Compiler to Optimize Your Code? <time datetime="2023-04-09">Apr 9, 2023</time></a>
+    </h1>
+<p>More or less the title this time, but first, a story about SIMD. There are three
+levels of understanding how SIMD works (well, at least I am level 3 at the moment):</p>
+<ol>
+<li>
+<p>Compilers are smart! They will auto-vectorize all the code!</p>
+</li>
+<li>
+<p>Compilers are dumb, auto-vectorization is fragile, it&rsquo;s very easy to break it
+by unrelated changes to the code. It&rsquo;s always better to manually write
+explicit SIMD instructions.</p>
+</li>
+<li>
+<p>Writing SIMD by hand is really hard &mdash; you&rsquo;ll need to re-do the work for
+every different CPU architecture. Also, you probably think that, for scalar
+code, a compiler writes better assembly than you. What makes you think that
+you&rsquo;d beat the compiler at SIMD, where there are more funky instructions and
+constraints? Compilers are tools. They can reliably vectorize code if it is
+written in an amenable-to-vectorization form.</p>
+</li>
+</ol>
+<p>I&rsquo;ve recently moved from the second level to the third one, and that made me aware of the moment when the model used by a compiler for optimization clicked in my head.
+In this post, I want to explain the general framework for reasoning about compiler optimizations for static languages such as Rust or C++.
+After that, I&rsquo;ll apply that framework to auto-vectorization.</p>
+<p>I haven&rsquo;t worked on backends of production optimizing compilers, so the following will not be academically correct, but these models are definitely helpful at least to me!</p>
+<section id="Seeing-Like-a-Compiler">
+
+    <h2>
+    <a href="#Seeing-Like-a-Compiler">Seeing Like a Compiler </a>
+    </h2>
+<p>The first bit of a puzzle is understanding how a compiler views code. Some useful references here include
+<a href="https://link.springer.com/book/10.1007/978-3-030-80515-9"><em>The SSA Book</em></a> or LLVM&rsquo;s
+<a href="https://llvm.org/docs/LangRef.html"><em>Language Reference</em></a>.</p>
+<p>Another interesting choice would be <a href="https://webassembly.github.io/spec/core/"><em>WebAssembly Specification</em></a>.
+While WASM would be a poor IR for an optimizing compiler, it has a lot of structural similarities, and the core spec is exceptionally readable.</p>
+<p>A unit of optimization is a function.
+Let&rsquo;s take a simple function like the following:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span> <span class="hl-title function_">sum</span>(xs: &amp;[<span class="hl-type">i32</span>]) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">i32</span> {</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">total</span> = <span class="hl-number">0</span>;</code>
+<code>  <span class="hl-keyword">for</span> <span class="hl-variable">i</span> <span class="hl-keyword">in</span> <span class="hl-number">0</span>..xs.<span class="hl-title function_ invoke__">len</span>() {</code>
+<code>    total = total.<span class="hl-title function_ invoke__">wrapping_add</span>(xs[i]);</code>
+<code>  }</code>
+<code>  total</code>
+<code>}</code></pre>
+
+</figure>
+<p>In some pseudo-IR, it would look like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code>fn sum return i32 {</code>
+<code>  param xs_ptr: ptr</code>
+<code>  param xs_len: size</code>
+<code></code>
+<code>  local total: i32</code>
+<code>  local i: size = 0</code>
+<code>  local x: i32</code>
+<code>  local total: i32 = 0</code>
+<code></code>
+<code>loop:</code>
+<code>  branch_if i &gt;= xs_len :ret</code>
+<code>  load x base=xs_ptr offset=i</code>
+<code>  add total x</code>
+<code>  add i 1</code>
+<code>  goto :loop</code>
+<code></code>
+<code>ret:</code>
+<code>  return total</code>
+<code>}</code></pre>
+
+</figure>
+<p>The most important characteristic here is that there are two kinds of entities:</p>
+<p><em>First</em>, there is program memory, very roughly an array of bytes.
+Compilers generally can not reason about the contents of the memory very well, because it is shared by all the functions, and different functions might interpret the contents of the memory differently.</p>
+<p><em>Second</em>, there are local variables.
+Local variables are not bytes &mdash; they are integers, they obey mathematical properties which a compiler can reason about.</p>
+<p>For example, if a compiler sees a loop like</p>
+
+<figure class="code-block">
+
+
+<pre><code>param n: u32</code>
+<code>local i: u32 = 0</code>
+<code>local total: u32</code>
+<code>local tmp</code>
+<code></code>
+<code>loop:</code>
+<code>  branch_if i &gt;= n :ret</code>
+<code>  set tmp i</code>
+<code>  mul tmp 4</code>
+<code>  add t tmp</code>
+<code>  goto :loop</code>
+<code></code>
+<code>ret:</code>
+<code>  return total</code></pre>
+
+</figure>
+<p>It can <em>reason</em> that on each iteration <code>tmp</code> holds <code>i * 4</code> and optimize the code to</p>
+
+<figure class="code-block">
+
+
+<pre><code>param n: u32</code>
+<code>local i: u32 = 0</code>
+<code>local total: u32</code>
+<code>local tmp = 0</code>
+<code></code>
+<code>loop:</code>
+<code>  branch_if i &gt;= n :ret</code>
+<code>  add t tmp</code>
+<code>  add tmp 4  # replace multiplication with addition</code>
+<code>  goto :loop</code>
+<code></code>
+<code>ret:</code>
+<code>  return total</code></pre>
+
+</figure>
+<p>This works, because all locals are just numbers.
+If we did the same computation, but all numbers were located in memory, it would be significantly harder for a compiler to reason that the transformation is actually correct.
+What if the storage for <code>n</code> and <code>total</code> actually overlaps?
+What if <code>tmp</code> overlaps with something which isn&rsquo;t even in the current function?</p>
+<p>However, there&rsquo;s a bridge between the worlds of mathematical local variables and the world of memory bytes &mdash; <code>load</code> and <code>store</code> instructions.
+The <code>load</code> instruction takes a range of bytes in memory, interprets the bytes as an integer, and stores that integer into a local variable.
+The <code>store</code> instruction does the opposite.
+By loading something from memory into a local, a compiler gains the ability to reason about it precisely.
+Thus, the compiler doesn&rsquo;t need to track the general contents of memory.
+It only needs to check that it would be correct to load from memory at a specific point in time.</p>
+<p>So, a compiler really doesn&rsquo;t see all that well &mdash; it can only really reason about a single function at a time, and only about the local variables in that function.</p>
+</section>
+<section id="Bringing-Code-Closer-to-Compiler-s-Nose">
+
+    <h2>
+    <a href="#Bringing-Code-Closer-to-Compiler-s-Nose">Bringing Code Closer to Compiler&rsquo;s Nose </a>
+    </h2>
+<p>Compilers are myopic.
+This can be fixed by giving more context to the compiler, which is the task of two core optimizations.</p>
+<p><em>The first</em> core optimization is <dfn>inlining</dfn>.
+It substitutes callee&rsquo;s body for a specific call.
+The benefit here is not that we eliminate function call overhead, that&rsquo;s relatively minor.
+The big thing is that locals of both the caller and the callee are now in the same frame, and a compiler can optimize them together.</p>
+<p>Let&rsquo;s look again at that Rust code:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span> <span class="hl-title function_">sum</span>(xs: &amp;[<span class="hl-type">i32</span>]) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">i32</span> {</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">total</span> = <span class="hl-number">0</span>;</code>
+<code>  <span class="hl-keyword">for</span> <span class="hl-variable">i</span> <span class="hl-keyword">in</span> <span class="hl-number">0</span>..xs.<span class="hl-title function_ invoke__">len</span>() {</code>
+<code>    total = total.<span class="hl-title function_ invoke__">wrapping_add</span>(xs[i]);</code>
+<code>  }</code>
+<code>  total</code>
+<code>}</code></pre>
+
+</figure>
+<p>The <code>xs[i]</code> expression there is actually a function call.
+The indexing function does a bounds check before accessing the element of an array.
+After inlining it into the <code>sum</code>, compiler can see that it is dead code and eliminate it.</p>
+<p>If you look at various standard optimizations, they often look like getting rid of dumb things, which no one would actually write in the first place, so its not clear immediately if it is worth it to implement such optimizations.
+But the thing is, after inlining a lot of dumb things appear, because functions tend to handle the general case, and, at a specific call-site, there are usually enough constraints to dismiss many edge cases.</p>
+<p><em>The second</em> core optimization is <dfn>scalar replacement of aggregates</dfn>.
+It is a generalization of the &ldquo;let&rsquo;s use <code>load</code> to avoid reasoning about memory and reason about a local instead&rdquo; idea we&rsquo;ve already seen.</p>
+<p>If you have a function like</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">fn</span> <span class="hl-title function_">permute</span>(xs: &amp;<span class="hl-keyword">mut</span> <span class="hl-type">Vec</span>&lt;<span class="hl-type">i32</span>&gt;) {</code>
+<code>  ...</code>
+<code>}</code></pre>
+
+</figure>
+<p>it&rsquo;s pretty difficult for the compiler to reason about it.
+It receives a pointer to some memory which holds a complex struct (ptr, len, capacity triple), so reasoning about evolution of this struct is hard.
+What the compiler can do is to load this struct from memory, replacing the aggregate with a bunch of scalar local variables:</p>
+
+<figure class="code-block">
+
+
+<pre><code>fn permute(xs: &amp;mut Vec&lt;i32&gt;) {</code>
+<code>  local ptr: ptr</code>
+<code>  local len: usize</code>
+<code>  local cap: usize</code>
+<code></code>
+<code>  load ptr xs.ptr</code>
+<code>  load len xs.len</code>
+<code>  load cap xs.cap</code>
+<code></code>
+<code>  ...</code>
+<code></code>
+<code>  store xs.ptr ptr</code>
+<code>  store xs.len len</code>
+<code>  store xs.cap cap</code>
+<code>}</code></pre>
+
+</figure>
+<p>This way, a compiler again gains reasoning power.
+SROA is like inlining, but for memory rather than code.</p>
+</section>
+<section id="Impossible-and-Possible">
+
+    <h2>
+    <a href="#Impossible-and-Possible">Impossible and Possible </a>
+    </h2>
+<p>Using this mental model of a compiler which:</p>
+<ul>
+<li>
+optimizes on a per-function basis,
+</li>
+<li>
+can inline function calls,
+</li>
+<li>
+is great at noticing relations between local variables and rearranging the code based on that,
+</li>
+<li>
+is capable of <em>limited</em> reasoning about the memory (namely, deciding when it&rsquo;s safe to <code>load</code> or <code>store</code>)
+</li>
+</ul>
+<p>we can describe which code is reliably optimizable, and which code prevents optimizations, explaining zero cost abstractions.</p>
+<p>To enable inlining, a compiler needs to know which function is actually called.
+If a function is called directly, it&rsquo;s pretty much guaranteed that a compiler would try to inline it.
+If the call is indirect (via function pointer, or via a table of virtual functions), in the general case a compiler won&rsquo;t be able to inline that.
+Even for indirect calls, sometimes the compiler can reason about the value of the pointer and de-virtualize the call, but that relies on successful optimization elsewhere.</p>
+<p>This is the reason why, in Rust, every function has a unique, zero-sized type with no runtime representation.
+It statically guarantees that the compiler could always inline the code, and makes this abstraction zero cost, because any decent optimizing compiler will melt it to nothing.</p>
+<p>A higher level language might choose to <em>always</em> represent functions with function pointers.
+In practice, in many cases the resulting code would be equivalently optimizable.
+But there won&rsquo;t be any indication in the source whether this is an optimizable case (the actual pointer is knowable at compile time) or a genuinely dynamic call.
+With Rust, the difference between guaranteed to be optimizable and potentially optimizable is reflected in the source language:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-comment">// Compiler is guaranteed to be able to inline call to `f`.</span></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">call1</span>&lt;F: <span class="hl-title function_ invoke__">Fn</span>()&gt;(f: F) {</code>
+<code>  <span class="hl-title function_ invoke__">f</span>()</code>
+<code>}</code>
+<code></code>
+<code><span class="hl-comment">// Compiler _might_ be able to inline call to `f`.</span></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">call2</span>(f: <span class="hl-title function_ invoke__">fn</span>()) {</code>
+<code>  <span class="hl-title function_ invoke__">f</span>()</code>
+<code>}</code></pre>
+
+</figure>
+<p>So, the first rule is to make most of the calls statically resolvable, to allow inlining.
+Function pointers and dynamic dispatch prevent inlining.
+Separate compilation might also get in a way of inlining, see this <a href="https://matklad.github.io/2021/07/09/inline-in-rust.html">separate essay</a> on the topic.</p>
+<p>Similarly, indirection in <em>memory</em> can cause troubles for the compiler.</p>
+<p>For something like this</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">struct</span> <span class="hl-title class_">Foo</span> {</code>
+<code>  bar: Bar,</code>
+<code>  baz: Baz,</code>
+<code>}</code></pre>
+
+</figure>
+<p>the <code>Foo</code> struct is completely transparent for the compiler.</p>
+<p>While here:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">struct</span> <span class="hl-title class_">Foo</span> {</code>
+<code>  bar: <span class="hl-type">Box</span>&lt;Bar&gt;,</code>
+<code>  baz: Baz,</code>
+<code>}</code></pre>
+
+</figure>
+<p>it is not clear cut.
+Proving something about the memory occupied by <code>Foo</code> does not in general transfer to the memory occupied by <code>Bar</code>.
+Again, in many cases a compiler <em>can</em> reason through boxes thanks to uniqueness, but this is not guaranteed.</p>
+<p>A good homework at this point is to look at Rust&rsquo;s iterators and understand why they look the way they do.</p>
+<p>Why the signature and definition of <a href="https://doc.rust-lang.org/stable/core/iter/trait.Iterator.html#method.map"><code>map</code></a> is</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-meta">#[inline]</span></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">map</span>&lt;B, F&gt;(<span class="hl-keyword">self</span>, f: F) <span class="hl-punctuation">-&gt;</span> Map&lt;<span class="hl-keyword">Self</span>, F&gt;</code>
+<code><span class="hl-keyword">where</span></code>
+<code>  <span class="hl-keyword">Self</span>: <span class="hl-built_in">Sized</span>,</code>
+<code>  F: <span class="hl-title function_ invoke__">FnMut</span>(<span class="hl-keyword">Self</span>::Item) <span class="hl-punctuation">-&gt;</span> B,</code>
+<code>{</code>
+<code>  Map::<span class="hl-title function_ invoke__">new</span>(<span class="hl-keyword">self</span>, f)</code>
+<code>}</code></pre>
+
+</figure>
+<p>Another important point about memory is that, in general, a compiler can&rsquo;t change the overall layout of stuff.
+SROA can load some data structure into a bunch of local variables, which then can, eg, replace &ldquo;a pointer and an index&rdquo; representation with &ldquo;a pair of pointers&rdquo;.
+But at the end of the day SROA would have to materialize &ldquo;a pointer and an index&rdquo; back and store that representation back into the memory.
+This is because memory layout is shared across all functions, so a function can not unilaterally dictate a more optimal representation.</p>
+<p>Together, these observations give a basic rule for the baseline of performant code.</p>
+
+<aside class="admn note">
+<i class="fa fa-info-circle"></i>
+<div><p>Think about data layout in memory.
+A compiler is of very little help here and would mostly put the bytes where you tell it to.
+Make data structures more compact, reduce indirection, exploit common access patterns for improving cache efficiency.</p>
+<p>Compilers are much better at reasoning about the code, as long as they can see it.
+Make sure that most calls are known at compile time and can be inlined, trust the compiler to do the rest.</p>
+</div>
+</aside></section>
+<section id="SIMD">
+
+    <h2>
+    <a href="#SIMD">SIMD </a>
+    </h2>
+<p>Let&rsquo;s apply this general framework of giving a compiler optimizable code to work with to auto-vectorization.
+We will be optimizing the function which computes the longest common prefix between two slices of bytes (thanks <a href="https://github.com/nkkarpov">@nkkarpov</a> for the example).</p>
+<p>A  direct implementation would look like this:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-keyword">use</span> std::iter::zip;</code>
+<code></code>
+<code><span class="hl-comment">// 650 milliseconds</span></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">common_prefix</span>(xs: &amp;[<span class="hl-type">u8</span>], ys: &amp;[<span class="hl-type">u8</span>]) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">usize</span> {</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">result</span> = <span class="hl-number">0</span>;</code>
+<code>  <span class="hl-title function_ invoke__">for</span> (x, y) <span class="hl-keyword">in</span> <span class="hl-title function_ invoke__">zip</span>(xs, ys) {</code>
+<code>    <span class="hl-keyword">if</span> x != y { <span class="hl-keyword">break</span>; }</code>
+<code>    result += <span class="hl-number">1</span></code>
+<code>  }</code>
+<code>  result</code>
+<code>}</code></pre>
+
+</figure>
+<p>If you already have a mental model for auto-vectorization, or if you look at the assembly output, you can realize that the function as written works one byte at a time, which is much slower than it needs to be.
+Let&rsquo;s fix that!</p>
+<p>SIMD works on many values simultaneously.
+Intuitively, we want the compiler to compare a bunch of bytes at the same time, but our current code does not express that.
+Let&rsquo;s make the structure explicit, by processing 16 bytes at a time, and then handling remainder separately:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-comment">// 450 milliseconds</span></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">common_prefix</span>(xs: &amp;[<span class="hl-type">u8</span>], ys: &amp;[<span class="hl-type">u8</span>]) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">usize</span> {</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">chunk_size</span> = <span class="hl-number">16</span>;</code>
+<code></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">result</span> = <span class="hl-number">0</span>;</code>
+<code></code>
+<code>  <span class="hl-symbol">&#x27;outer</span>: <span class="hl-title function_ invoke__">for</span> (xs_chunk, ys_chunk) <span class="hl-keyword">in</span></code>
+<code>    <span class="hl-title function_ invoke__">zip</span>(xs.<span class="hl-title function_ invoke__">chunks_exact</span>(chunk_size), ys.<span class="hl-title function_ invoke__">chunks_exact</span>(chunk_size))</code>
+<code>  {</code>
+<code>    <span class="hl-title function_ invoke__">for</span> (x, y) <span class="hl-keyword">in</span> <span class="hl-title function_ invoke__">zip</span>(xs_chunk, ys_chunk) {</code>
+<code>      <span class="hl-keyword">if</span> x != y { <span class="hl-keyword">break</span> <span class="hl-symbol">&#x27;outer</span>; }</code>
+<code>      result += <span class="hl-number">1</span></code>
+<code>    }</code>
+<code>  }</code>
+<code></code>
+<code>  <span class="hl-title function_ invoke__">for</span> (x, y) <span class="hl-keyword">in</span> <span class="hl-title function_ invoke__">zip</span>(&amp;xs[result..], &amp;ys[result..]) {</code>
+<code>    <span class="hl-keyword">if</span> x != y { <span class="hl-keyword">break</span>; }</code>
+<code>    result += <span class="hl-number">1</span></code>
+<code>  }</code>
+<code></code>
+<code>  result</code>
+<code>}</code></pre>
+
+</figure>
+<p>Amusingly, this is already a bit faster, but not quite there yet.
+Specifically, SIMD needs to process all values in the chunk in parallel in the same way.
+In our code above, we have a <code>break</code>, which means that processing of the nth pair of bytes depends on the n-1st pair.
+Let&rsquo;s fix <em>that</em> by disabling short-circuiting.
+We will check if the whole chunk of bytes matches or not, but we won&rsquo;t care which specific byte is a mismatch:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-comment">// 80 milliseconds</span></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">common_prefix3</span>(xs: &amp;[<span class="hl-type">u8</span>], ys: &amp;[<span class="hl-type">u8</span>]) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">usize</span> {</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">chunk_size</span> = <span class="hl-number">16</span>;</code>
+<code></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">result</span> = <span class="hl-number">0</span>;</code>
+<code>  <span class="hl-title function_ invoke__">for</span> (xs_chunk, ys_chunk) <span class="hl-keyword">in</span></code>
+<code>    <span class="hl-title function_ invoke__">zip</span>(xs.<span class="hl-title function_ invoke__">chunks_exact</span>(chunk_size), ys.<span class="hl-title function_ invoke__">chunks_exact</span>(chunk_size))</code>
+<code>  {</code>
+<code>    <span class="hl-keyword">let</span> <span class="hl-keyword">mut </span><span class="hl-variable">chunk_equal</span>: <span class="hl-type">bool</span> = <span class="hl-literal">true</span>;</code>
+<code>    <span class="hl-title function_ invoke__">for</span> (x, y) <span class="hl-keyword">in</span> <span class="hl-title function_ invoke__">zip</span>(xs_chunk, ys_chunk) {</code>
+<code>      <span class="hl-comment">// NB: &amp;, unlike &amp;&amp;, doesn&#x27;t short-circuit.</span></code>
+<code>      chunk_equal = chunk_equal &amp; (x == y);</code>
+<code>    }</code>
+<code></code>
+<code>    <span class="hl-keyword">if</span> !chunk_equal { <span class="hl-keyword">break</span>; }</code>
+<code>    result += chunk_size;</code>
+<code>  }</code>
+<code></code>
+<code>  <span class="hl-title function_ invoke__">for</span> (x, y) <span class="hl-keyword">in</span> <span class="hl-title function_ invoke__">zip</span>(&amp;xs[result..], &amp;ys[result..]) {</code>
+<code>    <span class="hl-keyword">if</span> x != y { <span class="hl-keyword">break</span>; }</code>
+<code>    result += <span class="hl-number">1</span></code>
+<code>  }</code>
+<code></code>
+<code>  result</code>
+<code>}</code></pre>
+
+</figure>
+<p>And this version finally lets vectorization kick in, reducing the runtime almost by an order of magnitude.
+We can now compress this version using iterators.</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-comment">// 80 milliseconds</span></code>
+<code><span class="hl-keyword">fn</span> <span class="hl-title function_">common_prefix5</span>(xs: &amp;[<span class="hl-type">u8</span>], ys: &amp;[<span class="hl-type">u8</span>]) <span class="hl-punctuation">-&gt;</span> <span class="hl-type">usize</span> {</code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">chunk_size</span> = <span class="hl-number">16</span>;</code>
+<code></code>
+<code>  <span class="hl-keyword">let</span> <span class="hl-variable">off</span> =</code>
+<code>    <span class="hl-title function_ invoke__">zip</span>(xs.<span class="hl-title function_ invoke__">chunks_exact</span>(chunk_size), ys.<span class="hl-title function_ invoke__">chunks_exact</span>(chunk_size))</code>
+<code>      .<span class="hl-title function_ invoke__">take_while</span>(|(xs_chunk, ys_chunk)| xs_chunk == ys_chunk)</code>
+<code>      .<span class="hl-title function_ invoke__">count</span>() * chunk_size;</code>
+<code></code>
+<code>  off + <span class="hl-title function_ invoke__">zip</span>(&amp;xs[off..], &amp;ys[off..])</code>
+<code>    .<span class="hl-title function_ invoke__">take_while</span>(|(x, y)| x == y)</code>
+<code>    .<span class="hl-title function_ invoke__">count</span>()</code>
+<code>}</code></pre>
+
+</figure>
+<p>Note how the code is meaningfully different from our starting point.
+We do not blindly rely on the compiler&rsquo;s optimization.
+Rather, we are aware about specific optimizations we need in this case, and write the code in a way that triggers them.</p>
+<p>Specifically, for SIMD:</p>
+<ul>
+<li>
+we express the algorithm in terms of processing <em>chunks</em> of elements,
+</li>
+<li>
+within each chunk, we make sure that there&rsquo;s no branching and all elements are processed in the same way.
+</li>
+</ul>
+</section>
+<section id="Conclusion">
+
+    <h2>
+    <a href="#Conclusion">Conclusion </a>
+    </h2>
+<p>Compilers are tools.
+While there&rsquo;s a fair share of &ldquo;optimistic&rdquo; transformations which sometimes kick in, the bulk of the impact of an optimizing compiler comes from guaranteed optimizations with specific preconditions.
+Compilers are myopic &mdash; they have a hard time reasoning about code outside of the current function and values not held in the local variables.
+Inlining and scalar replacement of aggregates are two optimizations to remedy the situation.
+Zero cost abstractions work by expressing opportunities for guaranteed optimizations in the language&rsquo;s type system.</p>
+<p>If you like this post, I highly recommend <a href="https://www.clear.rice.edu/comp512/Lectures/Papers/1971-allen-catalog.pdf"><em>A Catalogue of Optimizing Transformations</em></a> by Frances Allen.</p>
+</section>
+]]></content>
+</entry>
+
+<entry>
+<title type="text">UB Might Be a Wrong Term for Newer Languages</title>
+<link href="https://matklad.github.io/2023/04/02/ub-might-be-the-wrong-term-for-newer-languages.html" rel="alternate" type="text/html" title="UB Might Be a Wrong Term for Newer Languages" />
+<published>2023-04-02T00:00:00+00:00</published>
+<updated>2023-04-02T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2023/04/02/ub-might-be-the-wrong-term-for-newer-languages</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[A short note on undefined behavior, which assumes familiarity with the subject (see this article for the introduction).
+The TL;DR is that I think that carrying the wording from the C standard into newer languages, like Zig and Rust, might be a mistake.
+This is strictly the word choice, the lexical syntax of the comments argument.]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2023/04/02/ub-might-be-the-wrong-term-for-newer-languages.html"><![CDATA[
+    <h1>
+    <a href="#UB-Might-Be-a-Wrong-Term-for-Newer-Languages">UB Might Be a Wrong Term for Newer Languages <time datetime="2023-04-02">Apr 2, 2023</time></a>
+    </h1>
+<p>A short note on undefined behavior, which assumes familiarity with the subject (see <a href="https://blog.llvm.org/2011/05/what-every-c-programmer-should-know.html">this article</a> for the introduction).
+The TL;DR is that I think that carrying the wording from the C standard into newer languages, like Zig and Rust, might be a mistake.
+This is strictly the word choice, the &ldquo;lexical syntax of the comments&rdquo; argument.</p>
+<p>The C standard leaves many behaviors undefined.
+However, it allows any particular implementation to fill in the gaps and define some of undefined-in-the-standard behaviors.
+For example, C23 makes <code>realloc(ptr, 0)</code> into an undefined behavior, so that POSIX can further refine it without interfering with the standard (<a href="https://www.open-std.org/jtc1/sc22/wg14/www/docs/n2464.pdf">source</a>).</p>
+<p>It&rsquo;s also valid for an implementation to leave UB undefined.
+If a program compiled with this implementation hits this UB path, the behavior of the program <em>as a whole</em> is undefined
+(or rather, bounded by the execution environment. It is not <em>actually</em> possible to summon nasal daemons, because a user-space process can not escape its memory space other than by calling syscalls, and there are no nasal daemons summoning syscalls).</p>
+<p>C implementations are <em>not required to</em> but <em>may</em> define behaviors left undefined by the standard.
+A C program written for a specific implementation may rely on undefined-in-the-standard but defined-in-the-implementation behavior.</p>
+<p>Modern languages like <a href="https://doc.rust-lang.org/reference/behavior-considered-undefined.html">Rust</a> and <a href="https://ziglang.org/documentation/0.10.1/#Undefined-Behavior">Zig</a> re-use the &ldquo;undefined behavior&rdquo; term.
+However, the intended semantics is subtly different.
+A program exhibiting UB is <em>always</em> considered invalid.
+Even if an alternative implementation of Rust defines some of Rust&rsquo;s UB, the programs hitting those behaviors would still be incorrect.</p>
+<p>For this reason, I think it would be better to use a different term here.
+I am not ready to suggest a specific wording, but a couple of reasonable options would be &ldquo;non-trapping programming error&rdquo; or &ldquo;invalid behavior&rdquo;.
+The intended semantics being that any program execution containing illegal behavior is invalid under any implementation.</p>
+<p>Curiously, C++ is ahead of the pack here, as it has an explicit notion of &ldquo;ill-formed, no diagnostic required&rdquo;.</p>
+]]></content>
+</entry>
+
+<entry>
+<title type="text">Rust Is a Scalable Language</title>
+<link href="https://matklad.github.io/2023/03/28/rust-is-a-scalable-language.html" rel="alternate" type="text/html" title="Rust Is a Scalable Language" />
+<published>2023-03-28T00:00:00+00:00</published>
+<updated>2023-03-28T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2023/03/28/rust-is-a-scalable-language</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[In my last post about Zig and Rust, I mentioned that Rust is a scalable language.
+Let me expand on this a bit.]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2023/03/28/rust-is-a-scalable-language.html"><![CDATA[
+    <h1>
+    <a href="#Rust-Is-a-Scalable-Language">Rust Is a Scalable Language <time datetime="2023-03-28">Mar 28, 2023</time></a>
+    </h1>
+<p>In my last post about <a href="https://matklad.github.io/2023/03/26/zig-and-rust.html"><em>Zig and Rust</em></a>, I mentioned that Rust is a &ldquo;scalable language&rdquo;.
+Let me expand on this a bit.</p>
+<section id="Vertical-Scalability">
+
+    <h2>
+    <a href="#Vertical-Scalability">Vertical Scalability </a>
+    </h2>
+<p>Rust is vertically scalable, in that you can write all kinds of software in it.
+You can write an advanced zero-alloc image compression library, build a web server exposing the library to the world as an HTTP SAAS, and cobble together a &ldquo;script&rdquo; for building, testing, and deploying it to wherever people deploy software these days.
+And you would only need Rust &mdash; while it excels in the lowest half of the stack, it&rsquo;s pretty ok everywhere else too.</p>
+</section>
+<section id="Horizontal-Scalability">
+
+    <h2>
+    <a href="#Horizontal-Scalability">Horizontal Scalability </a>
+    </h2>
+<p>Rust is horizontally scalable, in that you can easily parallelize development of large software artifacts across many people and teams.
+Rust itself moves with a breakneck speed, which is surprising for such a loosely coordinated and chronically understaffed open source project of this scale.
+The relatively small community  managed to put together a comprehensive ecosystem of composable high-quality crates on a short notice.
+Rust is so easy to compose reliably that even the stdlib itself does not shy from pulling dependencies from crates.io.</p>
+<p>Steve Klabnik wrote about <a href="https://steveklabnik.com/writing/rusts-golden-rule"><em>Rust&rsquo;s Golden Rule</em></a>,
+how function signatures are mandatory and authoritative and explicitly define the interface both for the callers of the function and for the function&rsquo;s body.
+This thinking extends to other parts of the language.</p>
+<p>My second most favorite feature of Rust (after safety) is its module system.
+It has first-class support for the concept of a library.
+A library is called a crate and is a tree of modules, a unit of compilation, and a principle visibility boundary.
+Modules can contain circular dependencies, but libraries always form a directed acyclic graph.
+There&rsquo;s no global namespace of symbols &mdash; libraries are anonymous, names only appear on dependency edges between two libraries, and are local to the downstream crate.</p>
+<p>The benefits of this core compilation model are then greatly amplified by Cargo, which is not a generalized task runner, but rather a rigid specification for what is a package of Rust code:</p>
+<ul>
+<li>
+a (library) crate,
+</li>
+<li>
+a manifest, which defines dependencies between packages in a declarative way, using semver,
+</li>
+<li>
+an ecosystem-wide agreement on the semantics of dependency specification, and accompanied dependency resolution algorithm.
+</li>
+</ul>
+<p>Crucially, there&rsquo;s absolutely no way in Cargo to control the actual build process.
+The <code>build.rs</code> file can be used to provide extra runtime inputs, but it&rsquo;s <code>cargo</code> who calls <code>rustc</code>.</p>
+<p>Again, Cargo defines a rigid interface for a reusable piece of Rust code.
+Both producers and consumers must abide by these rules, there is no way around them.
+As a reward, they get a super-power of working together by working apart.
+I don&rsquo;t need to ping dtolnay in Slack when I want to use serde-json because we implicitly pre-agreed to a shared golden rule.</p>
+</section>
+]]></content>
+</entry>
+
+<entry>
+<title type="text">Zig And Rust</title>
+<link href="https://matklad.github.io/2023/03/26/zig-and-rust.html" rel="alternate" type="text/html" title="Zig And Rust" />
+<published>2023-03-26T00:00:00+00:00</published>
+<updated>2023-03-26T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2023/03/26/zig-and-rust</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[This post will be a bit all over the place.
+Several months ago, I wrote Hard Mode Rust, exploring an allocation-conscious style of programming.
+In the ensuing discussion, @jamii name-dropped TigerBeetle, a reliable, distributed, fast, and small database written in Zig in a similar style, and, well, I now find myself writing Zig full-time, after more than seven years of Rust.
+This post is a hand-wavy answer to the why? question.
+It is emphatically not a balanced and thorough comparison of the two languages.
+I haven't yet written my 100k lines of Zig to do that.
+(if you are looking for a more general what the heck is Zig, I can recommend @jamii's post).
+In fact, this post is going to be less about languages, and more about styles of writing software (but pre-existing knowledge of Rust and Zig would be very helpful).
+Without further caveats, let's get started.]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2023/03/26/zig-and-rust.html"><![CDATA[
+    <h1>
+    <a href="#Zig-And-Rust">Zig And Rust <time datetime="2023-03-26">Mar 26, 2023</time></a>
+    </h1>
+<p>This post will be a bit all over the place.
+Several months ago, I wrote <a href="https://matklad.github.io/2022/10/06/hard-mode-rust.html"><em>Hard Mode Rust</em></a>, exploring an allocation-conscious style of programming.
+In the ensuing discussion, <a href="https://github.com/Jamii">@jamii</a> name-dropped <a href="https://tigerbeetle.com">TigerBeetle</a>, a reliable, distributed, fast, and small database written in Zig in a similar style, and, well, I now find myself writing Zig full-time, after more than seven years of Rust.
+This post is a hand-wavy answer to the &ldquo;why?&rdquo; question.
+It is emphatically <em>not</em> a balanced and thorough comparison of the two languages.
+I haven&rsquo;t yet written my <a href="https://matklad.github.io/2021/09/05/Rust100k.html">100k lines of Zig</a> to do that.
+(if you are looking for a more general &ldquo;what the heck is Zig&rdquo;, I can recommend <a href="https://www.scattered-thoughts.net/writing/assorted-thoughts-on-zig-and-rust/">@jamii&rsquo;s post</a>).
+In fact, this post is going to be less about languages, and more about styles of writing software (but pre-existing knowledge of Rust and Zig would be very helpful).
+Without further caveats, let&rsquo;s get started.</p>
+<section id="Reliable-Software">
+
+    <h2>
+    <a href="#Reliable-Software">Reliable Software </a>
+    </h2>
+<p>To the first approximation, we all strive to write bug-free programs.
+But I think a closer look reveals that we don&rsquo;t actually care about programs being correct 100% of the time, at least in the majority of the domains.
+Empirically, almost every program has bugs, and yet it somehow works out OK.
+To pick one specific example, most programs use stack, but almost no programs understand what their stack usage is exactly, and how far they can go.
+When we call <code>malloc</code>, we just hope that we have enough stack space for it, we almost never check.
+Similarly, all Rust programs abort on OOM, and can&rsquo;t state their memory requirements up-front.
+Certainly good enough, but not perfect.</p>
+<p>The second approximation is that we strive to balance program usefulness with the effort to develop the program.
+Bugs reduce usefulness a lot, and there are two styles of software engineering to deal with the:</p>
+<p><em>Erlang style</em>, where we embrace failability of both hardware and software and explicitly design programs to be resilient to partial faults.</p>
+<p><a href="https://www.sqlite.org/testing.html"><em>SQLite style</em></a>, where we overcome an unreliable environment at the cost of rigorous engineering.</p>
+<p>rust-analyzer and TigerBeetle are perfect specimens of the two approaches, let me describe them.</p>
+</section>
+<section id="rust-analyzer">
+
+    <h2>
+    <a href="#rust-analyzer">rust-analyzer </a>
+    </h2>
+<p><a href="https://rust-analyzer.github.io">rust-analyzer</a> is an LSP server for the Rust programming language.
+By its nature, it&rsquo;s expansive.
+Great developer tools usually have a feature for every niche use-case.
+It also is a fast-moving open source project which has to play catch-up with the <code>rustc</code> compiler.
+Finally, the nature of IDE dev tooling makes availability significantly more important than correctness.
+An erroneous completion option would cause a smirk (if it is noticed at all), while the server crashing and all syntax highlighting turning off will be noticed immediately.</p>
+<p>For this cluster of reasons, rust-analyzer is shifted far towards the &ldquo;embrace software imperfections&rdquo; side of the spectrum.
+rust-analyzer is designed around having bugs.
+All the various features are carefully compartmentalized at runtime, such that panicking code in just a single feature can&rsquo;t bring down the whole process.
+Critically, almost no code has access to any mutable state, so usage of <code>catch_unwind</code> can&rsquo;t lead to a rotten state.</p>
+<p>Development process <em>itself</em> is informed by this calculus.
+For example, PRs with new features land when there&rsquo;s a reasonable certainty that the happy case works correctly.
+If some weird incomplete code would cause the feature to crash, that&rsquo;s OK.
+It might be even a benefit &mdash; fixing a well-reproducible bug in an isolated feature is a gateway drug to heavy contribution to rust-analyzer.
+Our tight weekly release schedule (and the nightly release) help to get bug fixes out there faster.</p>
+<p>Overall, the philosophy is to maximize provided value by focusing on the common case.
+Edge cases become eventually correct over time.</p>
+</section>
+<section id="TigerBeetle">
+
+    <h2>
+    <a href="#TigerBeetle">TigerBeetle </a>
+    </h2>
+<p>TigerBeetle is the opposite of that.</p>
+<p>It is a database, with domain model fixed at compile time (we currently do double-entry bookkeeping).
+The database is distributed, meaning that there are six TigerBeetle replicas running on different geographically and operationally isolated machines, which together implement a replicated state machine.
+That is, TigerBeetle replicas exchange messages to make sure every replica processes the same set of transactions, in the same order.
+That&rsquo;s a surprisingly hard problem if you allow machines to fail (the whole point of using many machines for redundancy), so we use a smart <a href="https://pmg.csail.mit.edu/papers/vr-revisited.pdf">consensus algorithm</a>  (non-byzantine) for this.
+Traditionally, consensus algorithms assume reliable storage &mdash; data once written to disk can be always retrieved later.
+In reality, storage is unreliable, nearly byzantine &mdash; a disk can return bogus data without signaling an error, and even a single such error can <a href="https://www.usenix.org/conference/fast18/presentation/alagappan">break consensus</a>.
+TigerBeetle combats that by allowing a replica to repair its local storage using data from other replicas.</p>
+<p>On the engineering side of things, we are building a reliable, predictable system.
+And predictable means <em>really</em> predictable.
+Rather than reigning in sources of non-determinism, we build the whole system from the ground up from a set of fully deterministic, hand crafted components.
+Here are some of our unconventional choices (<a href="https://github.com/tigerbeetledb/tigerbeetle/blob/fe09404d465df46b2bdfc017633eff37b4ab2343/docs/DESIGN.md">design doc</a>):</p>
+<p>It&rsquo;s <a href="https://matklad.github.io/2022/10/06/hard-mode-rust.html">hard mode</a>!
+We allocate all the memory at a startup, and there&rsquo;s zero allocation after that.
+This removes all the uncertainty about allocation.</p>
+<p>The code is architected with brutal simplicity.
+As a single example, we don&rsquo;t use JSON, or ProtoBuf, or Cap&rsquo;n&rsquo;Proto for serialization.
+Rather, we just cast the bytes we received from the network to a desired type.
+The motivation here is not so much performance, as reduction of the number of moving parts.
+Parsing is hard, but, if you control both sides of the communication channel, you don&rsquo;t need to do it, you can send checksummed data as is.</p>
+<p>We aggressively minimize all dependencies.
+We know exactly the system calls our system is making, because all IO is our own code (on Linux, our main production platform, we don&rsquo;t link libc).</p>
+<p>There&rsquo;s little abstraction between components &mdash; all parts of TigerBeetle work in concert.
+For example, one of our core types, <a href="https://github.com/tigerbeetledb/tigerbeetle/blob/fe09404d465df46b2bdfc017633eff37b4ab2343/src/message_pool.zig#L64"><code>Message</code></a>, is used throughout the stack:</p>
+<ul>
+<li>
+network receives bytes from a TCP connection directly into a <code>Message</code>
+</li>
+<li>
+consensus processes and sends <code>Message</code>s
+</li>
+<li>
+similarly, storage writes <code>Message</code>s to disk
+</li>
+</ul>
+<p>This naturally leads to very simple and fast code.
+We don&rsquo;t need to do anything special to be zero copy &mdash; given that we allocate everything up-front, we simply don&rsquo;t have any extra memory to copy the data to!
+(A separate issue is that, arguably, you just can&rsquo;t treat storage as a separate black box in a fault-tolerant distributed system, because storage is also faulty).</p>
+<p><em>Everything</em> in TigerBeetle has an explicit upper-bound.
+There&rsquo;s not a thing which is <em>just</em> an <code>u32</code> &mdash; all data is checked to meet specific numeric limits at the edges of the system.</p>
+<p>This includes <code>Message</code>s.
+We just upper-bound how many messages can be in-memory at the same time, and allocate precisely that amount of messages (<a href="https://github.com/tigerbeetledb/tigerbeetle/blob/53092098d69cc8facf94a2472bc79ca9d525a605/src/message_pool.zig#L16-L40">source</a>).
+Getting a new message from the message pool can&rsquo;t allocate and can&rsquo;t fail.</p>
+<p>With all that strictness and explicitness about resources, of course we also fully externalize any IO, including time.
+<em>All</em> inputs are passed in explicitly, there&rsquo;s no ambient influences from the environment.
+And that means that the bulk of our testing consists of trying all possible permutations of effects of the environment.
+Deterministic randomized simulation is <a href="https://dl.acm.org/doi/10.1145/3158134">very effective</a> at uncovering issues in real implementations of distributed systems.</p>
+<p>What I am getting at is that TigerBeetle isn&rsquo;t really a normal &ldquo;program&rdquo; program.
+It strictly is a finite state machine, explicitly coded as such.</p>
+</section>
+<section id="Back-From-The-Weeds">
+
+    <h2>
+    <a href="#Back-From-The-Weeds">Back From The Weeds </a>
+    </h2>
+<p>Oh, right, Rust and Zig, the topic of the post!</p>
+<p>I find myself often returning to <a href="http://venge.net/graydon/talks/intro-talk.pdf">the first Rust slide deck</a>.
+A lot of core things are different (no longer Rust uses only the old ideas), but a lot is the same.
+To be a bit snarky, while Rust &ldquo;is not for lone genius hackers&rdquo;, Zig &hellip; kinda is.
+On more peaceable terms, while Rust is a language for building <em>modular</em> software, Zig is in some sense anti-modular.</p>
+<p>It&rsquo;s appropriate to quote <a href="https://youtu.be/HgtRAbE1nBM?t=2359">Bryan Cantrill</a> here:</p>
+
+<figure class="blockquote">
+<blockquote><p>I can write C that frees memory properly&hellip;that basically doesn&rsquo;t suffer from
+memory corruption&hellip;I can do that, because I&rsquo;m controlling heaven and earth in
+my software. It makes it very hard to compose software. Because even if you and
+I both know how to write memory safe C, it&rsquo;s very hard for us to have an
+interface boundary where we can agree about who does what.</p>
+</blockquote>
+
+</figure>
+<p>That&rsquo;s the core of what Rust is doing: it provides you with a language to precisely express the contracts between components, such that components can be integrated in a machine-checkable way.</p>
+<p>Zig doesn&rsquo;t do that. It isn&rsquo;t even memory safe. My first experience writing a non-trivial Zig program went like this:</p>
+
+<figure class="blockquote">
+<blockquote><p>ME: Oh wow! Do you mean I can finally <em>just</em> store a pointer to a struct&rsquo;s field in the struct itself?</p>
+<p>30 seconds later</p>
+<p>PROGRAM: Segmentation fault.</p>
+</blockquote>
+
+</figure>
+<p>However!<br>
+Zig <em>is</em> a much smaller language than Rust.
+Although you&rsquo;ll <em>have</em> to be able to keep the entirety of the program in your head, to control heaven and earth to not mess up resource management, doing that could be easier.</p>
+<p>It&rsquo;s not true that rewriting a Rust program in Zig would make it simpler.
+On the contrary, I expect the result to be significantly more complex (and segfaulty).
+I noticed that a lot of Zig code written in &ldquo;let&rsquo;s replace <a href="https://doc.rust-lang.org/rust-by-example/scope/raii.html">RAII</a> with <a href="https://ziglang.org/documentation/master/#defer">defer</a>&rdquo; style has resource-management bugs.</p>
+<p>But it often is possible to architect the software such that there&rsquo;s little resource management to do (eg, allocating everything up-front, like TigerBeetle, or even at compile time, like many smaller embedded systems).
+It&rsquo;s hard &mdash; simplicity is always hard.
+But, if you go this  way, I feel like Zig can provide substantial benefits.</p>
+<p>Zig has just a single feature, dynamically-typed comptime, which subsumes most of the special-cased Rust machinery.
+It is definitely a tradeoff, instantiation-time errors are much worse for complex cases.
+But a lot more of the cases are simple, because there&rsquo;s no need for programming in the language of types.
+Zig is very spartan when it comes to the language.
+There are no closures &mdash; if you want them, you&rsquo;ll have to pack a wide-pointer yourself.
+Zig&rsquo;s expressiveness is aimed at producing just the right assembly, not at allowing maximally concise and abstract source code.
+In the words of Andrew Kelley, Zig is a DSL for emitting machine code.</p>
+<p>Zig strongly prefers explicit resource management.
+A lot of Rust programs are web-servers.
+Most web servers have a very specific execution pattern of processing multiple independent short-lived requests concurrently.
+The most natural way to code this would be to give each request a dedicated bump allocator, which turns drops into no-ops and &ldquo;frees&rdquo; the memory at bulk after each request by resetting offset to zero.
+This would be pretty efficient, and would provide per-request memory profiling and limiting out of the box.
+I don&rsquo;t think any popular Rust frameworks do this &mdash; using the global allocator is convenient enough and creates a strong local optima.
+Zig forces you to pass the allocator in, so you might as well think about the most appropriate one!</p>
+<p>Similarly, the standard library is very conscious about allocation, more so than Rust&rsquo;s.
+Collections are <em>not</em> parametrized by an allocator, like in C++ or (future) Rust.
+Rather, an allocator is passed in explicitly to every method which actually needs to allocate.
+This is <a href="https://matklad.github.io/2020/12/28/csdi.html"><em>Call Site Dependency Injection</em></a>, and it is more flexible.
+For example in TigerBeetle we need a couple of hash maps.
+These maps are sized at a startup time to hold just the right number of elements, and are never resized.
+So we pass an allocator to <a href="https://github.com/tigerbeetledb/tigerbeetle/blob/53092098d69cc8facf94a2472bc79ca9d525a605/src/vsr/replica.zig#L540"><code>init</code></a> method, but we don&rsquo;t pass it to the <a href="https://github.com/tigerbeetledb/tigerbeetle/blob/53092098d69cc8facf94a2472bc79ca9d525a605/src/vsr/replica.zig#L758">event loop</a>.
+We get to both use the standard hash-map, and to feel confident that there&rsquo;s no way we can allocate in the actual event loop, because it doesn&rsquo;t have access to an allocator.</p>
+</section>
+<section id="Wishlist">
+
+    <h2>
+    <a href="#Wishlist">Wishlist </a>
+    </h2>
+<p>Finally, my wishlist for Zig.</p>
+<p><em>First</em>, I think Zig&rsquo;s strength lies strictly in the realm of writing &ldquo;perfect&rdquo; systems software.
+It is a relatively thin slice of the market, but it is important.
+One of the problems with Rust is that we don&rsquo;t have a reliability-oriented high-level programming language with a good quality of implementation (modern ML, if you will).
+This is a blessing for Rust, because it makes its niche bigger, increasing the amount of community momentum behind the language.
+This is also a curse, because a bigger niche makes it harder to maintain focus.
+For Zig, Rust already plays this role of &ldquo;modern ML&rdquo;, which creates bigger pressure to specialize.</p>
+<p><em>Second</em>, my biggest worry about Zig is its semantics around aliasing, provenance, mutability and self-reference ball of problems.
+I don&rsquo;t worry all that much about this creating &ldquo;iterator invalidation&rdquo; style of UB.
+TigerBeetle runs in <code>-DReleaseSafe</code>, which mostly solves spatial memory safety, it doesn&rsquo;t really do dynamic memory allocation, which unasks the question about temporal memory safety,
+and it has a very thorough fuzzer-driven test suite, which squashes the remaining bugs.
+I do worry about the semantics of the language itself.
+My current understanding is that, to correctly compile a C-like low-level language, one really needs to nail down semantics of pointers.
+I am not sure &ldquo;portable assembly&rdquo; is really a thing: it is possible to create a compiler which does little optimization and &ldquo;works as expected&rdquo; most of the time, but I am doubtful that it&rsquo;s possible to correctly describe the behavior of such a compiler.
+If you start asking questions about what are pointers, and what is memory, you end up in a fairly complicated land, where bytes are poison.
+Rust tries to define that precisely, but writing code which abides by the Rust rules without a borrow-checker isn&rsquo;t really possible &mdash; the rules are too subtle.
+Zig&rsquo;s implementation today is <em>very</em> fuzzy around potentially aliased pointers, copies of structs with interior-pointers and the like.
+I wish that Zig had a clear answer to what the desired semantics is.</p>
+<p><em>Third</em>, IDE support.
+I&rsquo;ve written about that before <a href="https://matklad.github.io/2023/02/10/how-a-zig-ide-could-work.html">on this blog</a>.
+As of today, developing Zig is quite pleasant &mdash; <a href="https://github.com/zigtools/zls">the language server</a> is pretty spartan, but already is quite helpful, and for the rest, Zig is exceptionally greppable.
+But, with the lazy compilation model and the absence of out-of-the-language meta programming, I feel like Zig could be more ambitious here.
+To position itself well for the future in terms of IDE support, I think it would be nice if the compiler gets the basic data model for IDE use-case.
+That is, there should be an API to create a persistent analyzer process, which ingests a stream of code edits, and produces a continuously updated model of the code without explicit compilation requests.
+The model can be very simple, just &ldquo;give me an AST of this file at this point in time&rdquo; would do &mdash; all the fancy IDE features can be filled in later.
+What matters is a shape of data flow through the compiler &mdash; not an edit-compile cycle, but rather a continuously updated view of the world.</p>
+<p><em>Fourth</em>, one of the values of Zig which resonates with me a lot is a preference for low-dependency, self-contained processes.
+Ideally, you get yourself a <code>./zig</code> binary, and go from there.
+The preference, at this time of changes, is to bundle a particular version of <code>./zig</code> with a project, instead of using a system-wide <code>zig</code>.
+There are two aspects that could be better.</p>
+<p>&ldquo;Getting yourself a Zig&rdquo; is a finicky problem, because it requires bootstrapping.
+To do that, you need to run some code that will download the binary for your platform, but each platform has its own way to &ldquo;run code&rdquo;.
+I wish that Zig provided a blessed set of scripts, <code>get_zig.sh</code>, <code>get_zig.bat</code>, etc (or maybe a small actually portable binary?), which projects could just vendor, so that the contribution experience becomes fully project-local and self-contained:</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-title function_">$</span> ./get_zig.sh</code>
+<code><span class="hl-title function_">$</span> ./zig build</code></pre>
+
+</figure>
+<p>Once you have <code>./zig</code>, you can use that to drive the <em>rest</em> of the automation.
+You already can <code>./zig build</code> to drive the build, but there&rsquo;s more to software than just building.
+There&rsquo;s always a long tail of small things which traditionally get solved with a pile of platform-dependent bash scripts.
+I wish that Zig pushed the users harder towards specifying all that automation in Zig.
+A picture is worth a thousand words, so</p>
+
+<figure class="code-block">
+
+
+<pre><code><span class="hl-comment"># BAD: dependency on the OS</span></code>
+<code><span class="hl-title function_">$</span> ./scripts/deploy.sh --port 92</code>
+<code><span class="hl-output"></span></code>
+<code><span class="hl-comment"># OK: no dependency, but a mouthful to type</span></code>
+<code><span class="hl-title function_">$</span> ./zig build task -- deploy --port 92</code>
+<code><span class="hl-output"></span></code>
+<code><span class="hl-comment"># Would be GREAT:</span></code>
+<code><span class="hl-title function_">$</span> ./zig do deploy --port 92</code></pre>
+
+</figure>
+<p>Attempting to summarize,</p>
+<ul>
+<li>
+Rust is about compositional safety, it&rsquo;s a more scalable language than Scala.
+</li>
+<li>
+Zig is about perfection.
+It is a very sharp, dangerous, but, ultimately, more flexible tool.
+</li>
+</ul>
+<p>Discussion on <a href="https://old.reddit.com/r/Zig/comments/123jpia/blog_post_zig_and_rust/">/r/Zig</a> and <a href="https://old.reddit.com/r/rust/comments/123jpry/blog_post_zig_and_rust/">/r/rust</a>.</p>
+</section>
+]]></content>
+</entry>
+
+<entry>
+<title type="text">An Engine For An Editor</title>
+<link href="https://matklad.github.io/2023/03/08/an-engine-for-an-editor.html" rel="alternate" type="text/html" title="An Engine For An Editor" />
+<published>2023-03-08T00:00:00+00:00</published>
+<updated>2023-03-08T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2023/03/08/an-engine-for-an-editor</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[A common trope is how, if one wants to build a game, one should build a game, rather than a game engine, because it is all too easy to fall into a trap of building a generic solution, without getting to the game proper.
+It seems to me that the situation with code editors is the opposite --- many people build editors, but few are building editor engines.
+What's an editor engine? A made up term I use to denote a thin waist the editor is build upon, the set of core concepts, entities and APIs which power the variety of editor's components.
+In this post, I will highlight Emacs' thin waist, which I think is worthy of imitation!]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2023/03/08/an-engine-for-an-editor.html"><![CDATA[
+    <h1>
+    <a href="#An-Engine-For-An-Editor">An Engine For An Editor <time datetime="2023-03-08">Mar 8, 2023</time></a>
+    </h1>
+<p>A common trope is how, if one wants to build a game, one should build a game, rather than a game engine, because it is all too easy to fall into a trap of building a generic solution, without getting to the game proper.
+It seems to me that the situation with code editors is the opposite &mdash; many people build editors, but few are building &ldquo;editor engines&rdquo;.
+What&rsquo;s an &ldquo;editor engine&rdquo;? A made up term I use to denote a <a href="https://www.oilshell.org/blog/2022/02/diagrams.html"><dfn>thin waist</dfn></a> the editor is build upon, the set of core concepts, entities and APIs which power the variety of editor&rsquo;s components.
+In this post, I will highlight Emacs&rsquo; thin waist, which I think is worthy of imitation!</p>
+<p>Before we get to Emacs, lets survey various APIs for building interactive programs.</p>
+<dl>
+<dt>Plain text</dt>
+<dd>
+<p>The simplest possible thing, the UNIX way of programs-filters, reading input from stdin and writing data to stdout.
+The language here is just plain text.</p>
+</dd>
+<dt>ANSI escape sequences</dt>
+<dd>
+<p>Adding escape codes to plain text (and a bunch of <code>ioctl</code>s) allows changing colors and clearing the screen.
+The language becomes a sequence of commands for the terminal (with &ldquo;print text&rdquo; being a fairly frequent one).
+This already is rich enough to power a variety of terminal applications, such as vim!</p>
+</dd>
+<dt>HTML</dt>
+<dd>
+<p>With more structure, we can disentangle ourselves from text, and say that all the stuff is made of trees of attributed elements (whose content might be text).
+That turns out to be enough to express basically whatever, as the world of modern web apps testifies.</p>
+</dd>
+<dt>Canvas</dt>
+<dd>
+<p>Finally, to achieve maximal flexibility, we can start with a clean 2d canvas with pixels and an event stream, and let the app draw however it likes.
+Desktop GUIs usually work that way (using some particular widget library to encapsulate common patterns of presentation and event handling).</p>
+</dd>
+</dl>
+<hr>
+<p>Emacs is different.
+Its thin waist consists of (using idiosyncratic olden editor terminology) frames, windows, buffers and attributed text.
+This is <em>less</em> general than canvas or HTML, but more general (and way more principled) than ANSI escapes.
+Crucially, this also retains most of plain text&rsquo;s <em>composability</em>.</p>
+<p>The foundation is a text with attributes &mdash; a pair of a string and a map from string&rsquo;s subranges to key-value dictionaries.
+Attributes express presentation (color, font, text decoration), but also semantics.
+A range of text can be designated as clickable.
+Or it can specify a custom keymap, which is only active when the cursor is on this range.</p>
+<p>I find this to be a sweet spot for building efficient user interfaces.
+Consider <a href="https://magit.vc">magit</a>:</p>
+
+<figure>
+
+<img alt="" src="/assets/magit.png">
+</figure>
+<p>The interface is built from text, but it is more discoverable, more readable, and more efficient than GUI solutions.</p>
+<p>Text is <a href="https://graydon2.dreamwidth.org/193447.html">surprisingly good</a> at communicating with humans!
+Forgoing arbitrary widgets and restricting oneself to a grid of characters greatly constrains the set of possible designs, but designs which come out of these constraints tend to be better.</p>
+<hr>
+<p>The rest (buffers, windows, and frames) serve to present attributed strings to the user.
+A Buffer holds a piece of text and stores position of the cursor (and the rest of editor&rsquo;s state for this particular piece of text).
+A tiling window manager displays buffers:</p>
+<ul>
+<li>
+there&rsquo;s a set of floating windows (frames in Emacs terminology) managed by a desktop environment
+</li>
+<li>
+each floating window is subdivided into a tree of vertical and horizontal splits (windows) managed by Emacs
+</li>
+<li>
+each split displays a buffer, although some buffers might not have a corresponding split
+</li>
+</ul>
+<p>There&rsquo;s also a tasteful selection of extras outside this orthogonal model.
+A buffer holds a status bar at the bottom and a set of fringe decorations at the left edge.
+Each floating window has a minibuffer &mdash; an area to type commands into (minibuffer <em>is</em> a buffer though &mdash; only presentation is slightly unusual).</p>
+<p>But the vast majority of everything else is not special &mdash; every significant thing is a buffer.
+So, <code>./main.rs</code> file, <code>./src</code> file tree, a terminal session where you type <code>cargo build</code> are all displayed as attributed text.
+All use the same tools for navigation and manipulation.</p>
+<p>Universality is the power of the model.
+Good old UNIX pipes, except interactive.
+With a GUI file manager, mass-renaming files requires <a href="https://apps.kde.org/krename/">a dedicated utility</a>.
+In Emacs, file manager&rsquo;s state is text, so you can use standard text-manipulation tools (regexes, multiple cursors, vim&rsquo;s <kbd><kbd>.</kbd></kbd>) for the same task.</p>
+<section id="Conclusions">
+
+    <h2>
+    <a href="#Conclusions">Conclusions </a>
+    </h2>
+<p>Pay more attention to the editor&rsquo;s thin waist.
+Don&rsquo;t take it as a given that an editor should be a terminal, HTML, or GUI app &mdash; there might be a better vocabulary.
+In particular, Emacs seems to hit the sweet spot with its language of attributed strings and buffers.</p>
+<p>I am not sure that Emacs is the best we can do, but having a Rust library which implements Emacs model more or less as is would be nice!
+The two best resources to learn about this model are</p>
+<ul>
+<li>
+this diagram:<br>
+<a href="https://www2.lib.uchicago.edu/keith/emacs/#org9c6cafa" class="url">https://www2.lib.uchicago.edu/keith/emacs/#org9c6cafa</a>
+</li>
+<li>
+this section of Emacs docs:<br>
+<a href="https://www.gnu.org/software/emacs/manual/html_node/elisp/Text-Properties.html" class="url">https://www.gnu.org/software/emacs/manual/html_node/elisp/Text-Properties.html</a>
+</li>
+</ul>
+</section>
+]]></content>
+</entry>
+
+<entry>
+<title type="text">Why SAT Is Hard</title>
+<link href="https://matklad.github.io/2023/02/21/why-SAT-is-hard.html" rel="alternate" type="text/html" title="Why SAT Is Hard" />
+<published>2023-02-21T00:00:00+00:00</published>
+<updated>2023-02-21T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2023/02/21/why-SAT-is-hard</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[An introductory post about complexity theory today!
+It is relatively well-known that there exist so-called NP-complete problems --- particularly hard problems, such that, if you solve one of them efficiently, you can solve all of them efficiently.
+I think I've learned relatively early that, e.g., SAT is such a hard problem.
+I've similarly learned a bunch of specific examples of equally hard problems, where solving one solves the other.
+However, why SAT is harder than any NP problem remained a mystery for a rather long time to me.
+It is a shame --- this fact is rather intuitive and easy to understand.
+This post is my attempt at an explanation.
+It assumes some familiarity with the space, but it's not going to be too technical or thorough.]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2023/02/21/why-SAT-is-hard.html"><![CDATA[
+    <h1>
+    <a href="#Why-SAT-Is-Hard">Why SAT Is Hard <time datetime="2023-02-21">Feb 21, 2023</time></a>
+    </h1>
+<p>An introductory post about complexity theory today!
+It is relatively well-known that there exist so-called NP-complete problems &mdash; particularly hard problems, such that, if you solve one of them efficiently, you can solve <em>all</em> of them efficiently.
+I think I&rsquo;ve learned relatively early that, e.g., SAT is such a hard problem.
+I&rsquo;ve similarly learned a bunch of specific examples of equally hard problems, where solving one solves the other.
+However, why SAT is harder than <em>any</em> NP problem remained a mystery for a rather long time to me.
+It is a shame &mdash; this fact is rather intuitive and easy to understand.
+This post is my attempt at an explanation.
+It assumes <em>some</em> familiarity with the space, but it&rsquo;s not going to be too technical or thorough.</p>
+<section id="Summary">
+
+    <h2>
+    <a href="#Summary">Summary </a>
+    </h2>
+<p>Let&rsquo;s say you are solving some search problem, like &ldquo;find a path that visits every vertex in a graph once&rdquo;.
+It is often possible to write a naive algorithm for it, where we exhaustively check every possible prospective solution:</p>
+
+<figure class="code-block">
+
+
+<pre><code>for every possible path:</code>
+<code>    if path visits every vertex once:</code>
+<code>        return path</code>
+<code>else:</code>
+<code>    return "no solution"</code></pre>
+
+</figure>
+<p>Although <em>checking</em> each specific candidate is pretty fast, the whole algorithm is exponential, because there are too many (exponent of) candidates.
+Turns out, it is possible to write &ldquo;check if solution fits&rdquo; part as a SAT formula!
+And, if you have a magic algorithm which solves SAT, you can use that to find a candidate solution which would work instead of enumerating all solutions!</p>
+<p>In other words, solving SAT removes &ldquo;search&rdquo; from &ldquo;search and check&rdquo;.</p>
+<p>That&rsquo;s more or less everything I wanted to say today, but let&rsquo;s make this a tiny bit more formal.</p>
+</section>
+<section id="Background">
+
+    <h2>
+    <a href="#Background">Background </a>
+    </h2>
+<p>We will be discussing algorithms and their runtime.
+Big-O notation is a standard instrument for describing performance of algorithms, as it erases small differences which depend on a particular implementation of the algorithm.
+Both 2N + 1000 and 100N are O(N), linear.</p>
+<p>In this post we will be even <em>less</em> precise.
+We will talk about <dfn>polynomial time</dfn> &mdash; an algorithm is polynomial if it is O(N<sup>k</sup>) for some k.
+For example, N<sup>100</sup> is polynomial, while 2<sup>N</sup> is not.</p>
+<p>We will also be thinking about Turing machines (<dfn>TM</dfn>s) as our implementation device.
+Programming algorithms directly on Turing machines is cumbersome, but TMs have two advantages for our use case:</p>
+<ul>
+<li>
+it&rsquo;s natural to define runtime of TM
+</li>
+<li>
+it&rsquo;s easy to simulate a TM as a part of some larger algorithm (an interpreter for a TM is a small program)
+</li>
+</ul>
+<p>Finally, we will only think about problems with binary answers (<dfn>decision problem</dfn>).
+&ldquo;Is there a solution to this formula?&rdquo; rather than &ldquo;what is the solution to this formula?&rdquo;.
+&ldquo;Is there a path in the graph of length at least N?&rdquo; rather than &ldquo;what is the longest path in this graph?&rdquo;.</p>
+</section>
+<section id="Definitions">
+
+    <h2>
+    <a href="#Definitions">Definitions </a>
+    </h2>
+<p>Intuitively, a problem is NP if it&rsquo;s easy to check that a solution is valid (even if <em>finding</em> the solution might be hard).
+This intuition doesn&rsquo;t exactly work for yes/no problems we are considering.
+To fix this, we will also provide a &ldquo;hint&rdquo; for the checker.
+For example, if the problem is &ldquo;is there a path of length N in a given graph?&rdquo; the hint will be a path.</p>
+<p>A decision problem is <dfn>NP</dfn>, if there&rsquo;s an algorithm that can verify a &ldquo;yes&rdquo; answer in polynomial time, given a suitable hint.</p>
+<p>That is, for every input where the answer is &ldquo;yes&rdquo; (and only for those inputs) there should be a hint that makes our verifying algorithm answer &ldquo;yes&rdquo;.</p>
+<p>Boolean satisfiability, or <dfn>SAT</dfn> is a decision problem where an input is a boolean formula like</p>
+
+<figure class="code-block">
+
+
+<pre><code>(A and B and !C) or</code>
+<code>(C and D) or</code>
+<code>!B</code></pre>
+
+</figure>
+<p>and the answer is &ldquo;yes&rdquo; if the formula evaluates to true for some variable assignment.</p>
+<p>It&rsquo;s easy to see that SAT is NP: the hint is variable assignment which satisfies the formula, and verifier evaluates the formula.</p>
+</section>
+<section id="Sketch-of-a-Proof">
+
+    <h2>
+    <a href="#Sketch-of-a-Proof">Sketch of a Proof </a>
+    </h2>
+<p>Turns out, there is the &ldquo;hardest&rdquo; problem in NP &mdash; solving just that single problem in polynomial time automatically solves every other NP problem in polynomial time (we call such problems <dfn>NP-complete</dfn>).
+Moreover, there&rsquo;s actually a bunch of such problems, and SAT is one of them.
+Let&rsquo;s see why!</p>
+<p>First, let&rsquo;s define a (somewhat artificial) problem which is trivially NP-complete.</p>
+<p>Let&rsquo;s start with this one: &ldquo;Given a Turing machine and an input for it of length N, will the machine output &ldquo;yes&rdquo; after N<sup>k</sup> steps?&rdquo;
+(here k is a fixed parameter; pedantically, I describe a family of problems, one for each k)</p>
+<p>This is <em>very</em> similar to a halting problem, but also much easier.
+We explicitly bound the runtime of the Turing machine by a polynomial, so we don&rsquo;t need to worry about &ldquo;looping forever&rdquo; case &mdash; that would be a &ldquo;no&rdquo; for us.
+The naive algorithm here works: we just run the given machine on a given input for a given amount of steps and look at the answer.</p>
+<p>Now, if we formulate the problem as &ldquo;<em>Is</em> there an input <strong><strong>I</strong></strong> for a given Turing machine <strong><strong>M</strong></strong> such that <strong><strong>M(I)</strong></strong> answers &ldquo;yes&rdquo; after N<sup>k</sup> steps?&rdquo; we get our NP-complete problem.
+It&rsquo;s trivially NP &mdash; the hint is the input that makes the machine answer &ldquo;yes&rdquo;, and the verifier just runs our TM with this input for N<sup>k</sup> steps.
+It can also be used to efficiently solve any other NP problem (e.g. SAT).
+Indeed, we can use the verifying TM as <strong><strong>M</strong></strong>, and that way find if there&rsquo;s any hint that makes it answer &ldquo;yes&rdquo;.</p>
+<p>This is a bit circular and hard to wrap ones head around, but, at the same time, trivial.
+We essentially just carefully stare at the definition of an NP problem, specifically produce an algorithm that can solve any NP problem by directly using the definition, and notice that the resulting algorithm is also NP.
+Now there&rsquo;s no surprise that there exists the hardest NP problem &mdash; we essentially <em>defined</em> NP such that this is the case.</p>
+<p>What is still a bit mysterious is why non-weird problems like SAT also turn out to be NP-complete?
+This is because SAT is powerful enough to encode a Turing machine!</p>
+<p><em>First</em>, note that we can encode a state of a Turing machine as a set of boolean variables.
+We&rsquo;ll need a boolean variable T<sub>i</sub> for each position on a tape.
+The tape is in general infinite, but all our Turing machines run for polynomial (finite) time, so they use only a finite amount of cells, and it&rsquo;s enough to create variables only for those cells.
+Position of the head can also be described by a set of booleans variables.
+For example, we can have a P<sub>i</sub> &ldquo;is the head at a cell <code>i</code>&rdquo; variable for each cell.
+Similarly, we can encode the finite number of states our machine can be in as a set of S<sub>i</sub> variables (is the machine in state <code>i</code>?).</p>
+<p><em>Second</em>, we can write a set of boolean equations which describe a single transition of our Turing machine.
+For example  the value of cell i at the second step T2<sub>i</sub> will depend on its value on the previous step T1<sub>i</sub>, whether the head was at <code>i</code> (P1<sub>i</sub>) and the rules of our specific states.
+For example, if our machine flips bits in state <code>0</code> and keeps them in state <code>1</code>, then the formula we get for each cell is</p>
+
+<figure class="code-block">
+
+
+<pre><code>T2_i &lt;=&gt;</code>
+<code>  (!P1_i and T1_i) # head is not on our cell, it can't change</code>
+<code>or (P1_i and (</code>
+<code>    S1_0 and !T1_i # flip case</code>
+<code>or  S1_1 and T1_i  # keep case</code>
+<code>))</code></pre>
+
+</figure>
+<p>We can write similar formulas for changes of P and S families of variables.</p>
+<p><em>Third</em>, after we wrote the transition formula for a single step, we can stack several such formulas on top of each other to get a formula for N steps.</p>
+<p>Now let&rsquo;s come back to our universal problem: &ldquo;is there an input which makes a given Turing machine answer &ldquo;yes&rdquo; in N<sup>k</sup> steps?&rdquo;.
+At this point, it&rsquo;s clear that we can replace a &ldquo;Turing machine with N<sup>k</sup> steps&rdquo; with our transition formula duplicated N<sup>k</sup> times.
+So, the question of existence of an input for a Turing machine reduces to the question of existence of a solution to a (big, but still polynomial) SAT formula.</p>
+<p>And this concludes the sketch!</p>
+</section>
+<section id="Summary-Again">
+
+    <h2>
+    <a href="#Summary-Again">Summary, Again </a>
+    </h2>
+<p>SAT is hard, because it allows encoding Turing machine transitions.
+We can&rsquo;t encode loops in SAT, but we can encode &ldquo;N steps of a Turing machine&rdquo; by repeating the same formula N times with small variations.
+So, if we know that a particular Turing machine runs in polynomial time, we <em>can</em> encode it by a polynomially-sized formula.
+(see also <a href="https://mochiro.moe/posts/09-meson-raytracer/">pure meson ray-tracer</a> for a significantly more practical application of a similar idea).</p>
+<p>And that means that every problem that can be solved by a brute-force search over all solutions can be reduced to a SAT instance, by encoding the body of the search loop as a SAT formula!</p>
+</section>
+]]></content>
+</entry>
+
+<entry>
+<title type="text">Three-State Stability</title>
+<link href="https://matklad.github.io/2023/02/16/three-state-stability.html" rel="alternate" type="text/html" title="Three-State Stability" />
+<published>2023-02-16T00:00:00+00:00</published>
+<updated>2023-02-16T00:00:00+00:00</updated>
+<id>https://matklad.github.io/2023/02/16/three-state-stability</id>
+<author><name>Alex Kladov</name></author>
+<summary type="html"><![CDATA[Usually, when discussing stability of the APIs (in a broad sense; databases and programming languages are also APIs), only two states are mentioned:]]></summary>
+<content type="html" xml:base="https://matklad.github.io/2023/02/16/three-state-stability.html"><![CDATA[
+    <h1>
+    <a href="#Three-State-Stability">Three-State Stability <time datetime="2023-02-16">Feb 16, 2023</time></a>
+    </h1>
+<p>Usually, when discussing stability of the APIs (in a broad sense; databases and programming languages are also APIs), only two states are mentioned:</p>
+<ul>
+<li>
+an API is stable if there&rsquo;s a promise that all future changes would be backwards compatible
+</li>
+<li>
+otherwise, it is unstable
+</li>
+</ul>
+<p>This is reflected in, e.g, SemVer: before 1.0, anything goes, after 1.0 you only allow to break API if you bump major version.</p>
+<p>I think the <em>actual</em> situation in the real world is a bit more nuanced than that.
+In addition to clearly stable or clearly unstable, there&rsquo;s often a poorly defined third category.
+It often manifests as either:</p>
+<ul>
+<li>
+some technically non-stable version of the project (e.g., <code>0.2</code>) becoming widely used and de facto stable
+</li>
+<li>
+some minor but technically breaking quietly slipping in shortly after 1.0
+</li>
+</ul>
+<p>Here&rsquo;s what I think happens over a lifetime of a typical API:</p>
+<p>In the first phase, the API is actively evolving.
+There is a promise of anti-stability &mdash; there&rsquo;s constant change and a lot of experimentation.
+Almost no one is using the project seriously:</p>
+<ul>
+<li>
+the API is simply incomplete, there are large gaps in functionality
+</li>
+<li>
+chasing upstream requires continuous, large effort
+</li>
+<li>
+there&rsquo;s no certainty that the project will, in fact, ship a stable version, rather than die
+</li>
+</ul>
+<p>In the second phase, the API is <em>mostly</em> settled.
+It does everything it needs to do, and the shape feels mostly right.
+Transition to this state happens when the API maintainers feel like they nailed down everything.
+However, no wide deployment had happened, so there might still be minor, but backwards incompatible adjustments wanting to be made.
+It makes sense to use the API for all <em>active</em> projects (though it costs you an innovation token).
+The thing basically works, you <em>might</em> need to adjust your code from time to time, occasionally an adjustment is not trivial, but the overall expected effort is low.
+The API is fully production ready, and has everything except stability.
+If you write a program on top of the API today, and try to run it ten years later, it will fail.
+But if you are making your own releases a couple of times a year, you should be fine.</p>
+<p>In the third phase, the API is fully stable, and no backwards-incompatible changes are expected.
+Otherwise, it is identical to the second phase.
+Transition to this phase happens after:</p>
+<ul>
+<li>
+early adopters empirically stop uncovering deficiencies in the API
+</li>
+<li>
+API maintainers make a commitment to maintain stability.
+</li>
+</ul>
+<p>In other words, it is not unstable -&gt; stable, it is rather:</p>
+<ul>
+<li>
+experimental (unstable, not fit for production)
+</li>
+<li>
+production ready (still unstable, but you can budget-in a bounded amount of upgrade work)
+</li>
+<li>
+stable (no maintenance work is required)
+</li>
+</ul>
+<p>We don&rsquo;t have great, catchy terms to describe the second bullet, so it gets lumped together with the first or the last one.</p>
+]]></content>
+</entry>
+
+</feed>
